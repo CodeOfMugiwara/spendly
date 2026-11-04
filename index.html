@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#176b3a">
+  <meta name="description" content="A simple, private expense tracker that keeps your spending records on your device.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Spendly">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <title>Spendly — Expense Tracker</title>
+  <style>
+    :root{color-scheme:light;--green:#176b3a;--green2:#23834e;--ink:#17231b;--muted:#78827b;--bg:#f5f7f5;--card:#fff;--line:#e7ece8;--soft:#e4f2e9;--danger:#b42318}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:env(safe-area-inset-top) 16px calc(22px + env(safe-area-inset-bottom));max-width:620px;margin-inline:auto}
+    button,input{font:inherit}
+    button{cursor:pointer;-webkit-tap-highlight-color:transparent}
+    button:focus-visible,input:focus-visible{outline:2px solid #75b88e;outline-offset:2px}
+    .app{padding-top:14px}
+    .top{display:flex;justify-content:space-between;align-items:center;margin:4px 2px 20px}
+    .brand{font-size:23px;font-weight:800;letter-spacing:-.7px}.brand span{color:var(--green2)}
+    .status{font-size:11px;color:var(--muted)}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#269b58;margin-right:5px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:19px;padding:17px;margin-bottom:17px}
+    .hero{background:linear-gradient(140deg,#153f2b,#247448);color:#fff;border:0}
+    .eyebrow{font-size:11px;letter-spacing:.5px;color:var(--muted);font-weight:750}
+    .hero .eyebrow,.hero .sub{color:#d4e9dc}
+    .total{font-size:37px;font-weight:800;letter-spacing:-1.4px;margin:9px 0 5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+    .sub{font-size:12px}
+    .stats{display:flex;justify-content:space-between;border-top:1px solid #ffffff38;margin-top:18px;padding-top:14px;font-size:14px}
+    .stats small{display:block;color:#d4e9dc;font-size:11px;margin-bottom:5px}
+    .section-title{font-size:15px;font-weight:750;margin:4px 0 11px}
+    .periods{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:18px}
+    .period{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px 2px;font-size:12px;color:var(--muted)}
+    .period.active{background:var(--soft);color:var(--green);border-color:#c2dfcc;font-weight:750}
+    .primary{width:100%;border:0;border-radius:13px;padding:15px;background:var(--green);color:#fff;font-weight:750}
+    .primary:active{background:#12552e}
+    .secondary{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 12px;color:var(--ink);font-size:12px}
+    .row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 0;border-bottom:1px solid var(--line)}
+    .row:last-child{border:0}
+    .desc{font-size:14px;font-weight:650;overflow-wrap:anywhere}
+    .date{font-size:11px;color:var(--muted);margin-top:4px}
+    .amount{font-size:14px;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:3px}
+    .action{border:0;background:none;color:var(--green2);font-size:11px;padding:4px 0}
+    .action.delete{color:var(--danger)}
+    .empty{text-align:center;padding:28px 8px;color:var(--muted);font-size:13px}
+    .empty strong{display:block;color:var(--ink);margin-bottom:5px}
+    .nav{display:flex;background:#eaf0eb;padding:4px;border-radius:14px;margin:20px 0 4px}
+    .nav button{flex:1;border:0;background:transparent;padding:12px;border-radius:11px;color:var(--muted);font-size:13px}
+    .nav button.active{background:#fff;color:var(--green);font-weight:750;box-shadow:0 1px 3px #0000000c}
+    .hidden{display:none!important}
+    label{display:block;font-size:11px;font-weight:750;color:var(--muted);letter-spacing:.45px;margin-bottom:8px}
+    input{width:100%;border:1px solid var(--line);border-radius:11px;background:#fff;padding:13px;color:var(--ink);font-size:16px;min-width:0}
+    input:focus{outline:2px solid #a6d3b5;border-color:var(--green2)}
+    .field{margin-bottom:18px}
+    .form-amount{font-size:27px;font-weight:800}
+    .toolbar{display:flex;gap:8px;margin-bottom:14px}
+    .toolbar input{flex:1;min-width:0}
+    .note{text-align:center;color:var(--muted);font-size:11px;line-height:1.5;margin:13px 0}
+    .toast{text-align:center;font-size:12px;color:var(--green);min-height:18px;margin-top:9px}
+    .data-actions{display:flex;gap:8px}
+    .data-actions button{flex:1}
+    .install-hint{border:1px solid #cfe3d5;background:#f0f8f2;color:#245b37;border-radius:12px;padding:12px;font-size:12px;line-height:1.5;margin-bottom:15px}
+    @media(min-width:600px){body{padding-top:24px}.app{padding-top:10px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div><div class="brand">Spendly<span>.</span></div><div class="status">Your personal expense tracker</div></div>
+    <div class="status"><i class="dot"></i>On this device</div>
+  </header>
+
+  <main id="home">
+    <section class="card hero">
+      <div class="eyebrow">TOTAL SPENT</div>
+      <div class="total" id="total">₹0.00</div>
+      <div class="sub" id="periodLabel">This month</div>
+      <div class="stats">
+        <div><small>Transactions</small><b id="count">0</b></div>
+        <div style="text-align:right"><small>Daily average</small><b id="average">₹0.00</b></div>
+      </div>
+    </section>
+    <div class="section-title">Spending overview</div>
+    <div class="periods" id="periods">
+      <button class="period" data-period="week">Week</button>
+      <button class="period active" data-period="month">Month</button>
+      <button class="period" data-period="quarter">3 Months</button>
+      <button class="period" data-period="year">Year</button>
+    </div>
+    <div class="section-title">Recent expenses <button id="seeAll" style="float:right;border:0;background:none;color:var(--green2);font-size:12px;font-weight:700">See all →</button></div>
+    <section class="card" id="recent" style="padding:4px 15px">
+      <div class="empty"><strong>No expenses yet</strong>Your spending records will appear here.</div>
+    </section>
+    <button class="primary" id="add">＋ &nbsp; Add expense</button>
+  </main>
+
+  <main id="history" class="hidden">
+    <div style="font-size:22px;font-weight:800;margin:4px 0 5px">Your history</div>
+    <div class="status" style="margin-bottom:16px">Every expense, all in one place.</div>
+    <section class="card">
+      <div class="eyebrow">ALL-TIME SPENDING</div>
+      <div class="total" id="allTotal" style="color:var(--ink)">₹0.00</div>
+      <div class="status" id="allCount">0 transactions</div>
+    </section>
+    <div class="toolbar">
+      <input id="search" placeholder="Search expenses…" aria-label="Search expenses">
+      <button class="secondary" id="csv">Export CSV</button>
+    </div>
+    <section class="card" id="historyList" style="padding:4px 15px"></section>
+    <section class="card">
+      <b style="font-size:14px">Your data</b>
+      <p class="status" style="line-height:1.5">Download a backup to keep your records safe, or restore a previous backup.</p>
+      <div class="data-actions">
+        <button class="secondary" id="backup">Download backup</button>
+        <button class="secondary" id="restore">Restore backup</button>
+        <input id="file" type="file" accept=".json,application/json" class="hidden">
+      </div>
+    </section>
+    <p class="note">Your records are stored in this browser on this device. They do not sync automatically to other devices.</p>
+  </main>
+
+  <main id="form" class="hidden">
+    <button class="secondary" id="back" style="margin-bottom:15px">← Back</button>
+    <div style="font-size:22px;font-weight:800;margin-bottom:18px" id="formTitle">Add expense</div>
+    <form class="card" id="expenseForm">
+      <div class="field"><label for="amount">AMOUNT (₹)</label><input id="amount" class="form-amount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="0.00" required></div>
+      <div class="field"><label for="description">WHAT DID YOU SPEND ON?</label><input id="description" maxlength="100" placeholder="e.g. Lunch, Petrol, Groceries" required></div>
+      <div class="field"><label for="date">DATE</label><input id="date" type="date" required></div>
+      <button class="primary" id="save" type="submit">Save expense</button>
+      <button class="secondary" id="cancel" type="button" style="width:100%;margin-top:9px">Cancel</button>
+    </form>
+    <p class="note">Your expenses are saved locally on this device.</p>
+  </main>
+
+  <nav class="nav" aria-label="Main navigation">
+    <button id="homeTab" class="active">⌂ &nbsp; Home</button>
+    <button id="historyTab">▤ &nbsp; History</button>
+  </nav>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</div>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  // Keep this key stable between releases to preserve existing Spendly records.
+  const STORAGE_KEY = 'spendly_expenses_v1';
+  let expenses = [];
+  let selectedPeriod = 'month';
+  let editingId = null;
+
+  const money = value => new Intl.NumberFormat('en-IN', {
+    style: 'currency', currency: 'INR', minimumFractionDigits: 2, maximumFractionDigits: 2
+  }).format(value);
+
+  function localDate(date = new Date()) {
+    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+  }
+  const dateObj = value => new Date(`${value}T12:00:00`);
+  const prettyDate = value => dateObj(value).toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'});
+  const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[char]));
+  const say = message => { $('toast').textContent = message; };
+
+  function validExpense(item) {
+    return item && typeof item.id === 'string' &&
+      Number.isFinite(Number(item.amount)) && Number(item.amount) > 0 &&
+      typeof item.description === 'string' && item.description.trim().length > 0 &&
+      /^\d{4}-\d{2}-\d{2}$/.test(item.date);
+  }
+
+  function loadExpenses() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      expenses = Array.isArray(saved) ? saved.filter(validExpense) : [];
+    } catch {
+      expenses = [];
+      say('Saved data could not be read. Restore a backup if you have one.');
+    }
+  }
+
+  function saveExpenses() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
+      return true;
+    } catch {
+      say('Unable to save. Export a backup and check available browser storage.');
+      return false;
+    }
+  }
+
+  const sorted = list => [...list].sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  const total = list => list.reduce((sum,item) => sum + Number(item.amount), 0);
+
+  function getPeriodBounds() {
+    const now = new Date();
+    let start, end;
+    if (selectedPeriod === 'week') {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      start.setDate(start.getDate() - ((start.getDay()+6)%7));
+      end = new Date(start); end.setDate(end.getDate()+7);
+    } else if (selectedPeriod === 'month') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getFullYear(), now.getMonth()+1, 1);
+    } else if (selectedPeriod === 'quarter') {
+      start = new Date(now.getFullYear(), now.getMonth()-2, 1);
+      end = new Date(now.getFullYear(), now.getMonth()+1, 1);
+    } else {
+      start = new Date(now.getFullYear(), 0, 1);
+      end = new Date(now.getFullYear()+1, 0, 1);
+    }
+    return {start, end, startText:localDate(start), endText:localDate(end)};
+  }
+
+  const emptyHTML = '<div class="empty"><strong>No expenses yet</strong>Your spending records will appear here.</div>';
+
+  function expenseRow(item) {
+    return `<div class="row">
+      <div style="flex:1;min-width:0"><div class="desc">${escapeHTML(item.description)}</div><div class="date">${prettyDate(item.date)}</div></div>
+      <div><div class="amount">${money(Number(item.amount))}</div><div class="actions">
+        <button class="action" data-edit="${escapeHTML(item.id)}">Edit</button>
+        <button class="action delete" data-delete="${escapeHTML(item.id)}">Delete</button>
+      </div></div>
+    </div>`;
+  }
+
+  function renderHome() {
+    const bounds = getPeriodBounds();
+    const selected = sorted(expenses.filter(item => item.date >= bounds.startText && item.date < bounds.endText));
+    const amount = total(selected);
+    const elapsedDays = Math.max(1, Math.ceil((Math.min(Date.now(), bounds.end.getTime()) - bounds.start.getTime()) / 86400000));
+    $('total').textContent = money(amount);
+    $('periodLabel').textContent = ({week:'This week',month:'This month',quarter:'Last 3 months',year:'This year'})[selectedPeriod];
+    $('count').textContent = selected.length;
+    $('average').textContent = money(amount / elapsedDays);
+    $('recent').innerHTML = selected.length ? selected.slice(0,5).map(expenseRow).join('') : emptyHTML;
+    document.querySelectorAll('.period').forEach(button => button.classList.toggle('active', button.dataset.period === selectedPeriod));
+  }
+
+  function renderHistory() {
+    const query = $('search').value.toLowerCase().trim();
+    const matching = sorted(expenses).filter(item =>
+      item.description.toLowerCase().includes(query) ||
+      item.date.includes(query) || String(item.amount).includes(query)
+    );
+    $('allTotal').textContent = money(total(expenses));
+    $('allCount').textContent = `${expenses.length} transaction${expenses.length === 1 ? '' : 's'}`;
+    $('historyList').innerHTML = matching.length ? matching.map(expenseRow).join('') : emptyHTML;
+  }
+
+  function show(view) {
+    ['home','history','form'].forEach(name => $(name).classList.toggle('hidden', name !== view));
+    $('homeTab').classList.toggle('active', view === 'home');
+    $('historyTab').classList.toggle('active', view === 'history');
+    if (view === 'home') renderHome();
+    if (view === 'history') renderHistory();
+    window.scrollTo(0,0);
+  }
+
+  function openForm(id = null) {
+    editingId = id;
+    const item = expenses.find(expense => expense.id === id);
+    $('formTitle').textContent = item ? 'Edit expense' : 'Add expense';
+    $('save').textContent = item ? 'Update expense' : 'Save expense';
+    $('amount').value = item ? item.amount : '';
+    $('description').value = item ? item.description : '';
+    $('date').value = item ? item.date : localDate();
+    show('form');
+    setTimeout(() => $('amount').focus(), 80);
+  }
+
+  function handleRowAction(event) {
+    const editButton = event.target.closest('[data-edit]');
+    const deleteButton = event.target.closest('[data-delete]');
+    if (editButton) { openForm(editButton.dataset.edit); return; }
+    if (deleteButton) {
+      const item = expenses.find(expense => expense.id === deleteButton.dataset.delete);
+      if (item && confirm(`Delete "${item.description}" (${money(Number(item.amount))})?`)) {
+        expenses = expenses.filter(expense => expense.id !== item.id);
+        if (saveExpenses()) { renderHome(); renderHistory(); say('Expense deleted.'); }
+      }
+    }
+  }
+
+  $('periods').addEventListener('click', event => {
+    const button = event.target.closest('[data-period]');
+    if (!button) return;
+    selectedPeriod = button.dataset.period;
+    renderHome();
+  });
+  $('recent').addEventListener('click', handleRowAction);
+  $('historyList').addEventListener('click', handleRowAction);
+  $('add').addEventListener('click', () => openForm());
+  $('seeAll').addEventListener('click', () => show('history'));
+  $('homeTab').addEventListener('click', () => show('home'));
+  $('historyTab').addEventListener('click', () => show('history'));
+  $('back').addEventListener('click', () => show('home'));
+  $('cancel').addEventListener('click', () => show('home'));
+  $('search').addEventListener('input', renderHistory);
+
+  $('expenseForm').addEventListener('submit', event => {
+    event.preventDefault();
+    const amount = Number($('amount').value);
+    const description = $('description').value.trim();
+    const date = $('date').value;
+    if (!Number.isFinite(amount) || amount <= 0 || !description || !date) {
+      say('Enter a valid amount, description and date.');
+      return;
+    }
+    if (editingId) {
+      const existing = expenses.find(item => item.id === editingId);
+      if (existing) Object.assign(existing, {amount, description, date});
+    } else {
+      expenses.push({id:`${Date.now().toString(36)}${Math.random().toString(36).slice(2,8)}`, amount, description, date});
+    }
+    if (saveExpenses()) {
+      say(editingId ? 'Expense updated.' : 'Expense saved.');
+      show('home');
+    }
+  });
+
+  function download(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = filename;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  $('csv').addEventListener('click', () => {
+    const rows = [['Date','Description','Amount'], ...sorted(expenses).map(item => [item.date,item.description,item.amount])];
+    const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g,'""')}"`).join(',')).join('\r\n');
+    download(new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'}), 'spendly-expenses.csv');
+  });
+  $('backup').addEventListener('click', () => {
+    const backup = {app:'Spendly',version:1,exportedAt:new Date().toISOString(),expenses};
+    download(new Blob([JSON.stringify(backup,null,2)], {type:'application/json'}), 'spendly-backup.json');
+  });
+  $('restore').addEventListener('click', () => $('file').click());
+  $('file').addEventListener('change', async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const candidate = Array.isArray(parsed) ? parsed : parsed.expenses;
+      if (!Array.isArray(candidate) || !candidate.every(validExpense)) throw new Error('Invalid backup');
+      if (confirm(`Restore ${candidate.length} expenses? This replaces the records currently on this device.`)) {
+        expenses = candidate.map(item => ({id:String(item.id || `${Date.now()}${Math.random()}`),amount:Number(item.amount),description:item.description,date:item.date}));
+        if (saveExpenses()) { renderHome(); renderHistory(); say('Backup restored.'); }
+      }
+    } catch {
+      say('That backup file is invalid. No changes were made.');
+    } finally {
+      event.target.value = '';
+    }
+  });
+
+  loadExpenses();
+  show('home');
+
+  // Register the service worker only on HTTPS or localhost.
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(error => console.warn('Offline support could not be enabled:', error));
+    });
+  }
+})();
+</script>
+</body>
+</html>
