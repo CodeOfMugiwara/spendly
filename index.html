@@ -4,372 +4,387 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#176b3a">
-  <meta name="description" content="A simple, private expense tracker that keeps your spending records on your device.">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Spendly is a private, offline-first expense tracker. Your expenses are saved on this device.">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Spendly">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="mobile-web-app-capable" content="yes">
   <link rel="manifest" href="./manifest.json">
-  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png">
   <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./css/app.css">
   <title>Spendly — Expense Tracker</title>
-  <style>
-    :root{color-scheme:light;--green:#176b3a;--green2:#23834e;--ink:#17231b;--muted:#78827b;--bg:#f5f7f5;--card:#fff;--line:#e7ece8;--soft:#e4f2e9;--danger:#b42318}
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--ink);font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:env(safe-area-inset-top) 16px calc(22px + env(safe-area-inset-bottom));max-width:620px;margin-inline:auto}
-    button,input{font:inherit}
-    button{cursor:pointer;-webkit-tap-highlight-color:transparent}
-    button:focus-visible,input:focus-visible{outline:2px solid #75b88e;outline-offset:2px}
-    .app{padding-top:14px}
-    .top{display:flex;justify-content:space-between;align-items:center;margin:4px 2px 20px}
-    .brand{font-size:23px;font-weight:800;letter-spacing:-.7px}.brand span{color:var(--green2)}
-    .status{font-size:11px;color:var(--muted)}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#269b58;margin-right:5px}
-    .card{background:var(--card);border:1px solid var(--line);border-radius:19px;padding:17px;margin-bottom:17px}
-    .hero{background:linear-gradient(140deg,#153f2b,#247448);color:#fff;border:0}
-    .eyebrow{font-size:11px;letter-spacing:.5px;color:var(--muted);font-weight:750}
-    .hero .eyebrow,.hero .sub{color:#d4e9dc}
-    .total{font-size:37px;font-weight:800;letter-spacing:-1.4px;margin:9px 0 5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-    .sub{font-size:12px}
-    .stats{display:flex;justify-content:space-between;border-top:1px solid #ffffff38;margin-top:18px;padding-top:14px;font-size:14px}
-    .stats small{display:block;color:#d4e9dc;font-size:11px;margin-bottom:5px}
-    .section-title{font-size:15px;font-weight:750;margin:4px 0 11px}
-    .periods{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:18px}
-    .period{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px 2px;font-size:12px;color:var(--muted)}
-    .period.active{background:var(--soft);color:var(--green);border-color:#c2dfcc;font-weight:750}
-    .primary{width:100%;border:0;border-radius:13px;padding:15px;background:var(--green);color:#fff;font-weight:750}
-    .primary:active{background:#12552e}
-    .secondary{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 12px;color:var(--ink);font-size:12px}
-    .row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 0;border-bottom:1px solid var(--line)}
-    .row:last-child{border:0}
-    .desc{font-size:14px;font-weight:650;overflow-wrap:anywhere}
-    .date{font-size:11px;color:var(--muted);margin-top:4px}
-    .amount{font-size:14px;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap}
-    .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:3px}
-    .action{border:0;background:none;color:var(--green2);font-size:11px;padding:4px 0}
-    .action.delete{color:var(--danger)}
-    .empty{text-align:center;padding:28px 8px;color:var(--muted);font-size:13px}
-    .empty strong{display:block;color:var(--ink);margin-bottom:5px}
-    .nav{display:flex;background:#eaf0eb;padding:4px;border-radius:14px;margin:20px 0 4px}
-    .nav button{flex:1;border:0;background:transparent;padding:12px;border-radius:11px;color:var(--muted);font-size:13px}
-    .nav button.active{background:#fff;color:var(--green);font-weight:750;box-shadow:0 1px 3px #0000000c}
-    .hidden{display:none!important}
-    label{display:block;font-size:11px;font-weight:750;color:var(--muted);letter-spacing:.45px;margin-bottom:8px}
-    input{width:100%;border:1px solid var(--line);border-radius:11px;background:#fff;padding:13px;color:var(--ink);font-size:16px;min-width:0}
-    input:focus{outline:2px solid #a6d3b5;border-color:var(--green2)}
-    .field{margin-bottom:18px}
-    .form-amount{font-size:27px;font-weight:800}
-    .toolbar{display:flex;gap:8px;margin-bottom:14px}
-    .toolbar input{flex:1;min-width:0}
-    .note{text-align:center;color:var(--muted);font-size:11px;line-height:1.5;margin:13px 0}
-    .toast{text-align:center;font-size:12px;color:var(--green);min-height:18px;margin-top:9px}
-    .data-actions{display:flex;gap:8px}
-    .data-actions button{flex:1}
-    .install-hint{border:1px solid #cfe3d5;background:#f0f8f2;color:#245b37;border-radius:12px;padding:12px;font-size:12px;line-height:1.5;margin-bottom:15px}
-    @media(min-width:600px){body{padding-top:24px}.app{padding-top:10px}}
-  </style>
 </head>
 <body>
-<div class="app">
-  <header class="top">
-    <div><div class="brand">Spendly<span>.</span></div><div class="status">Your personal expense tracker</div></div>
-    <div class="status"><i class="dot"></i>On this device</div>
-  </header>
+  <a class="skip-link" href="#main">Skip to content</a>
 
-  <main id="home">
-    <section class="card hero">
-      <div class="eyebrow">TOTAL SPENT</div>
-      <div class="total" id="total">₹0.00</div>
-      <div class="sub" id="periodLabel">This month</div>
-      <div class="stats">
-        <div><small>Transactions</small><b id="count">0</b></div>
-        <div style="text-align:right"><small>Daily average</small><b id="average">₹0.00</b></div>
-      </div>
-    </section>
-    <div class="section-title">Spending overview</div>
-    <div class="periods" id="periods">
-      <button class="period" data-period="week">Week</button>
-      <button class="period active" data-period="month">Month</button>
-      <button class="period" data-period="quarter">3 Months</button>
-      <button class="period" data-period="year">Year</button>
+  <noscript>
+    <div class="noscript">
+      <strong>Spendly needs JavaScript.</strong>
+      Your expenses are stored privately in this browser, so the app cannot run until JavaScript is enabled.
     </div>
-    <div class="section-title">Recent expenses <button id="seeAll" style="float:right;border:0;background:none;color:var(--green2);font-size:12px;font-weight:700">See all →</button></div>
-    <section class="card" id="recent" style="padding:4px 15px">
-      <div class="empty"><strong>No expenses yet</strong>Your spending records will appear here.</div>
-    </section>
-    <button class="primary" id="add">＋ &nbsp; Add expense</button>
-  </main>
+  </noscript>
 
-  <main id="history" class="hidden">
-    <div style="font-size:22px;font-weight:800;margin:4px 0 5px">Your history</div>
-    <div class="status" style="margin-bottom:16px">Every expense, all in one place.</div>
-    <section class="card">
-      <div class="eyebrow">ALL-TIME SPENDING</div>
-      <div class="total" id="allTotal" style="color:var(--ink)">₹0.00</div>
-      <div class="status" id="allCount">0 transactions</div>
-    </section>
-    <div class="toolbar">
-      <input id="search" placeholder="Search expenses…" aria-label="Search expenses">
-      <button class="secondary" id="csv">Export CSV</button>
-    </div>
-    <section class="card" id="historyList" style="padding:4px 15px"></section>
-    <section class="card">
-      <b style="font-size:14px">Your data</b>
-      <p class="status" style="line-height:1.5">Download a backup to keep your records safe, or restore a previous backup.</p>
-      <div class="data-actions">
-        <button class="secondary" id="backup">Download backup</button>
-        <button class="secondary" id="restore">Restore backup</button>
-        <input id="file" type="file" accept=".json,application/json" class="hidden">
+  <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-home" viewBox="0 0 24 24">
+      <path d="M4 10.6 12 4l8 6.6V19a1.5 1.5 0 0 1-1.5 1.5H15v-6H9v6H5.5A1.5 1.5 0 0 1 4 19z"/>
+    </symbol>
+    <symbol id="i-history" viewBox="0 0 24 24">
+      <path d="M3.6 12a8.4 8.4 0 1 0 2.5-6"/>
+      <path d="M3.5 5.4V10H8"/>
+      <path d="M12 8v4.6l3 1.8"/>
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14"/>
+    </symbol>
+    <symbol id="i-search" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="6.4"/>
+      <path d="m15.8 15.8 4.4 4.4"/>
+    </symbol>
+    <symbol id="i-more" viewBox="0 0 24 24">
+      <circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none"/>
+      <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>
+      <circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24">
+      <path d="m9 5.5 6.5 6.5L9 18.5"/>
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 24 24">
+      <path d="M6 6l12 12M18 6 6 18"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="m5 12.5 4.5 4.5L19 7.5"/>
+    </symbol>
+    <symbol id="i-cloud-off" viewBox="0 0 24 24">
+      <path d="M7.5 18.5h9.2a4.3 4.3 0 0 0 1.9-8.2 6 6 0 0 0-1.6-3.2"/>
+      <path d="M8.2 6.2A6 6 0 0 0 5.4 11a3.8 3.8 0 0 0 1 7.5"/>
+      <path d="M4 4l16 16"/>
+    </symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24">
+      <rect x="5" y="10" width="14" height="10.5" rx="3"/>
+      <path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10"/>
+    </symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24">
+      <rect x="3.5" y="6" width="17" height="14" rx="4"/>
+      <path d="M3.5 9.5h12a2 2 0 0 1 0 4h-3a2 2 0 0 0 0 4h8"/>
+    </symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24">
+      <rect x="4" y="5.5" width="16" height="15" rx="3"/>
+      <path d="M8 3.5v4M16 3.5v4M4 10h16"/>
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24">
+      <path d="M12 3.5v11.5m0 0 4.2-4.2M12 15l-4.2-4.2"/>
+      <path d="M4.5 17.5v1.5a2.5 2.5 0 0 0 2.5 2.5h10a2.5 2.5 0 0 0 2.5-2.5v-1.5"/>
+    </symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24">
+      <path d="M12 15.5V4m0 0 4.2 4.2M12 4 7.8 8.2"/>
+      <path d="M4.5 17.5v1.5a2.5 2.5 0 0 0 2.5 2.5h10a2.5 2.5 0 0 0 2.5-2.5v-1.5"/>
+    </symbol>
+    <symbol id="i-table" viewBox="0 0 24 24">
+      <rect x="4" y="4.5" width="16" height="15" rx="3"/>
+      <path d="M4 9.5h16M4 14.5h16M9.5 9.5v10M15 9.5v10"/>
+    </symbol>
+    <symbol id="i-share" viewBox="0 0 24 24">
+      <path d="M12 15V3.5m0 0L8.3 7.2M12 3.5l3.7 3.7"/>
+      <path d="M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/>
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24">
+      <path d="M20.5 12a8.5 8.5 0 1 1-2.5-6"/>
+      <path d="M20.5 4.5V10H15"/>
+    </symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24">
+      <path d="M4 20h4.2L19.4 8.8a2.6 2.6 0 0 0-3.7-3.7L4.5 16.3z"/>
+      <path d="m14 6.5 3.5 3.5"/>
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24">
+      <path d="M4.5 7.5h15M9.5 7.5V5h5v2.5M6.5 7.5l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12"/>
+      <path d="M10 11.5v5.5M14 11.5v5.5"/>
+    </symbol>
+    <symbol id="i-info" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.5"/>
+      <path d="M12 11v5.5M12 7.7v.2"/>
+    </symbol>
+  </svg>
+
+  <div class="app">
+    <header class="app-bar" id="appBar">
+      <div class="app-bar__inner">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true">S<i></i></span>
+          <span class="brand__text">
+            <span class="brand__name">Spendly<span class="brand__dot">.</span></span>
+            <span class="brand__tag">Private expense tracker</span>
+          </span>
+        </div>
+        <div class="connection" id="connection" data-state="online" title="Where your expenses are saved">
+          <span class="connection__dot" aria-hidden="true"></span>
+          <span id="connectionText">On this device</span>
+        </div>
       </div>
-    </section>
-    <p class="note">Your records are stored in this browser on this device. They do not sync automatically to other devices.</p>
-  </main>
 
-  <main id="form" class="hidden">
-    <button class="secondary" id="back" style="margin-bottom:15px">← Back</button>
-    <div style="font-size:22px;font-weight:800;margin-bottom:18px" id="formTitle">Add expense</div>
-    <form class="card" id="expenseForm">
-      <div class="field"><label for="amount">AMOUNT (₹)</label><input id="amount" class="form-amount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="0.00" required></div>
-      <div class="field"><label for="description">WHAT DID YOU SPEND ON?</label><input id="description" maxlength="100" placeholder="e.g. Lunch, Petrol, Groceries" required></div>
-      <div class="field"><label for="date">DATE</label><input id="date" type="date" required></div>
-      <button class="primary" id="save" type="submit">Save expense</button>
-      <button class="secondary" id="cancel" type="button" style="width:100%;margin-top:9px">Cancel</button>
-    </form>
-    <p class="note">Your expenses are saved locally on this device.</p>
-  </main>
+      <div class="banner banner--offline" id="offlineBanner" role="status" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-cloud-off"></use></svg>
+        <p>You’re offline — your expenses are saved on this device.</p>
+      </div>
 
-  <nav class="nav" aria-label="Main navigation">
-    <button id="homeTab" class="active">⌂ &nbsp; Home</button>
-    <button id="historyTab">▤ &nbsp; History</button>
-  </nav>
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
-</div>
-<script>
-(() => {
-  'use strict';
-  const $ = id => document.getElementById(id);
-  // Keep this key stable between releases to preserve existing Spendly records.
-  const STORAGE_KEY = 'spendly_expenses_v1';
-  let expenses = [];
-  let selectedPeriod = 'month';
-  let editingId = null;
+      <div class="banner banner--update" id="updateBanner" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+        <p>A new version of Spendly is ready.</p>
+        <button class="banner__button" type="button" id="updateButton">Refresh</button>
+      </div>
+    </header>
 
-  const money = value => new Intl.NumberFormat('en-IN', {
-    style: 'currency', currency: 'INR', minimumFractionDigits: 2, maximumFractionDigits: 2
-  }).format(value);
+    <main class="main" id="main" tabindex="-1">
+      <div class="fatal" id="fatalError" role="alert" hidden>
+        <strong>Spendly couldn’t open its local database.</strong>
+        <p id="fatalMessage">Your expenses have not been deleted. Reload the page to try again.</p>
+        <button class="button button--quiet" type="button" id="reloadButton">Reload Spendly</button>
+      </div>
 
-  function localDate(date = new Date()) {
-    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
-  }
-  const dateObj = value => new Date(`${value}T12:00:00`);
-  const prettyDate = value => dateObj(value).toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'});
-  const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({
-    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
-  }[char]));
-  const say = message => { $('toast').textContent = message; };
+      <section class="view" id="view-home" aria-labelledby="homeTitle">
+        <h1 class="visually-hidden" id="homeTitle">Spendly dashboard</h1>
 
-  function validExpense(item) {
-    return item && typeof item.id === 'string' &&
-      Number.isFinite(Number(item.amount)) && Number(item.amount) > 0 &&
-      typeof item.description === 'string' && item.description.trim().length > 0 &&
-      /^\d{4}-\d{2}-\d{2}$/.test(item.date);
-  }
+        <section class="hero" aria-labelledby="heroLabel">
+          <div class="hero__glow" aria-hidden="true"></div>
+          <div class="hero__head">
+            <p class="hero__label" id="heroLabel">This month</p>
+            <span class="hero__chip">
+              <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
+              Local
+            </span>
+          </div>
+          <p class="hero__amount" id="heroAmount" aria-label="₹0.00" aria-live="polite">₹0.00</p>
+          <div class="hero__stats">
+            <div class="hero__stat">
+              <span>Transactions</span>
+              <strong id="heroCount">0</strong>
+            </div>
+            <div class="hero__stat hero__stat--end">
+              <span>Daily average</span>
+              <strong id="heroAverage">₹0.00</strong>
+            </div>
+          </div>
+        </section>
 
-  function loadExpenses() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-      expenses = Array.isArray(saved) ? saved.filter(validExpense) : [];
-    } catch {
-      expenses = [];
-      say('Saved data could not be read. Restore a backup if you have one.');
-    }
-  }
+        <section class="section" id="glanceSection" aria-labelledby="glanceTitle">
+          <div class="section__head">
+            <h2 class="section__title" id="glanceTitle">At a glance</h2>
+            <span class="section__hint">Saved totals</span>
+          </div>
+          <div class="glance" id="periodTiles" role="group" aria-label="Choose a spending period">
+            <button class="glance__tile" type="button" data-period="week" aria-pressed="false">
+              <span class="glance__label">This week</span>
+              <span class="glance__value" data-total="week">₹0.00</span>
+            </button>
+            <button class="glance__tile" type="button" data-period="month" aria-pressed="true">
+              <span class="glance__label">This month</span>
+              <span class="glance__value" data-total="month">₹0.00</span>
+            </button>
+            <button class="glance__tile" type="button" data-period="quarter" aria-pressed="false">
+              <span class="glance__label">3 months</span>
+              <span class="glance__value" data-total="quarter">₹0.00</span>
+            </button>
+            <button class="glance__tile" type="button" data-period="year" aria-pressed="false">
+              <span class="glance__label">This year</span>
+              <span class="glance__value" data-total="year">₹0.00</span>
+            </button>
+          </div>
+          <button class="alltime" type="button" id="allTimeButton">
+            <span class="alltime__text">
+              <span class="alltime__label">All time</span>
+              <strong class="alltime__total" id="allTimeTotal">₹0.00</strong>
+              <span class="alltime__meta">across <span id="allTimeCount">0</span> expenses</span>
+            </span>
+            <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+          </button>
+        </section>
 
-  function saveExpenses() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
-      return true;
-    } catch {
-      say('Unable to save. Export a backup and check available browser storage.');
-      return false;
-    }
-  }
+        <section class="section" aria-labelledby="recentTitle">
+          <div class="section__head">
+            <h2 class="section__title" id="recentTitle">Recent expenses</h2>
+            <button class="text-button" type="button" id="seeAllButton">
+              See all
+              <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+          </div>
+          <div class="list-card" id="recentList"></div>
+        </section>
 
-  const sorted = list => [...list].sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
-  const total = list => list.reduce((sum,item) => sum + Number(item.amount), 0);
+        <section class="panel week" aria-labelledby="weekTitle">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="weekTitle">This week</h2>
+              <p class="panel__sub">Monday to Sunday</p>
+            </div>
+            <p class="week__total" id="weekTotal">₹0.00</p>
+          </div>
+          <div class="week__bars" id="weekBars" role="img" aria-label="Daily spending this week"></div>
+          <p class="week__empty" id="weekEmpty">No spending recorded this week.</p>
+        </section>
 
-  function getPeriodBounds() {
-    const now = new Date();
-    let start, end;
-    if (selectedPeriod === 'week') {
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      start.setDate(start.getDate() - ((start.getDay()+6)%7));
-      end = new Date(start); end.setDate(end.getDate()+7);
-    } else if (selectedPeriod === 'month') {
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
-      end = new Date(now.getFullYear(), now.getMonth()+1, 1);
-    } else if (selectedPeriod === 'quarter') {
-      start = new Date(now.getFullYear(), now.getMonth()-2, 1);
-      end = new Date(now.getFullYear(), now.getMonth()+1, 1);
-    } else {
-      start = new Date(now.getFullYear(), 0, 1);
-      end = new Date(now.getFullYear()+1, 0, 1);
-    }
-    return {start, end, startText:localDate(start), endText:localDate(end)};
-  }
+        <aside class="install" id="installCard" hidden>
+          <span class="install__icon" aria-hidden="true">
+            <svg class="icon"><use href="#i-share"></use></svg>
+          </span>
+          <div class="install__body">
+            <p class="install__title" id="installTitle">Keep Spendly on your Home Screen</p>
+            <p class="install__text" id="installText">In Safari, tap Share, then “Add to Home Screen”.</p>
+            <button class="install__action" type="button" id="installButton" hidden>Install app</button>
+          </div>
+          <button class="icon-button install__close" type="button" id="installClose" aria-label="Dismiss Home Screen tip">
+            <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+          </button>
+        </aside>
+      </section>
 
-  const emptyHTML = '<div class="empty"><strong>No expenses yet</strong>Your spending records will appear here.</div>';
+      <section class="view" id="view-history" aria-labelledby="historyTitle" hidden>
+        <header class="page-head">
+          <p class="eyebrow">Ledger</p>
+          <h1 class="page-head__title" id="historyTitle">History</h1>
+          <p class="page-head__sub">Every expense, saved on this device.</p>
+        </header>
 
-  function expenseRow(item) {
-    return `<div class="row">
-      <div style="flex:1;min-width:0"><div class="desc">${escapeHTML(item.description)}</div><div class="date">${prettyDate(item.date)}</div></div>
-      <div><div class="amount">${money(Number(item.amount))}</div><div class="actions">
-        <button class="action" data-edit="${escapeHTML(item.id)}">Edit</button>
-        <button class="action delete" data-delete="${escapeHTML(item.id)}">Delete</button>
-      </div></div>
-    </div>`;
-  }
+        <section class="panel alltime-panel" aria-labelledby="allTimeHeading">
+          <p class="panel__label" id="allTimeHeading">All-time spending</p>
+          <p class="alltime-panel__amount" id="allTotal">₹0.00</p>
+          <div class="alltime-panel__foot">
+            <span id="allCount">0 expenses</span>
+            <span class="alltime-panel__range" id="allRange"></span>
+          </div>
+        </section>
 
-  function renderHome() {
-    const bounds = getPeriodBounds();
-    const selected = sorted(expenses.filter(item => item.date >= bounds.startText && item.date < bounds.endText));
-    const amount = total(selected);
-    const elapsedDays = Math.max(1, Math.ceil((Math.min(Date.now(), bounds.end.getTime()) - bounds.start.getTime()) / 86400000));
-    $('total').textContent = money(amount);
-    $('periodLabel').textContent = ({week:'This week',month:'This month',quarter:'Last 3 months',year:'This year'})[selectedPeriod];
-    $('count').textContent = selected.length;
-    $('average').textContent = money(amount / elapsedDays);
-    $('recent').innerHTML = selected.length ? selected.slice(0,5).map(expenseRow).join('') : emptyHTML;
-    document.querySelectorAll('.period').forEach(button => button.classList.toggle('active', button.dataset.period === selectedPeriod));
-  }
+        <div class="search">
+          <svg class="icon search__icon" aria-hidden="true"><use href="#i-search"></use></svg>
+          <input id="search" type="search" placeholder="Search expenses" aria-label="Search expenses" autocomplete="off" enterkeyhint="search">
+          <button class="search__clear" type="button" id="clearSearch" aria-label="Clear search" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+          </button>
+        </div>
 
-  function renderHistory() {
-    const query = $('search').value.toLowerCase().trim();
-    const matching = sorted(expenses).filter(item =>
-      item.description.toLowerCase().includes(query) ||
-      item.date.includes(query) || String(item.amount).includes(query)
-    );
-    $('allTotal').textContent = money(total(expenses));
-    $('allCount').textContent = `${expenses.length} transaction${expenses.length === 1 ? '' : 's'}`;
-    $('historyList').innerHTML = matching.length ? matching.map(expenseRow).join('') : emptyHTML;
-  }
+        <section class="section section--tight" aria-labelledby="ledgerTitle">
+          <div class="section__head">
+            <h2 class="section__title" id="ledgerTitle">All expenses</h2>
+            <span class="section__hint" id="resultCount"></span>
+          </div>
+          <div id="historyList"></div>
+        </section>
 
-  function show(view) {
-    ['home','history','form'].forEach(name => $(name).classList.toggle('hidden', name !== view));
-    $('homeTab').classList.toggle('active', view === 'home');
-    $('historyTab').classList.toggle('active', view === 'history');
-    if (view === 'home') renderHome();
-    if (view === 'history') renderHistory();
-    window.scrollTo(0,0);
-  }
+        <section class="panel data" aria-labelledby="dataTitle">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="dataTitle">Your data</h2>
+              <p class="panel__sub">Backups are files you keep. Nothing is uploaded.</p>
+            </div>
+          </div>
+          <div class="data__actions">
+            <button class="data__action" type="button" id="exportCsv">
+              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-table"></use></svg></span>
+              <span class="data__text"><strong>Export CSV</strong><small>For Excel or Google Sheets</small></span>
+              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <button class="data__action" type="button" id="downloadBackup">
+              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-download"></use></svg></span>
+              <span class="data__text"><strong>Download backup</strong><small>A complete copy as JSON</small></span>
+              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <button class="data__action" type="button" id="restoreBackup">
+              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-upload"></use></svg></span>
+              <span class="data__text"><strong>Restore backup</strong><small>Replace expenses from a JSON file</small></span>
+              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <input id="fileInput" type="file" accept="application/json,.json" hidden>
+          </div>
+        </section>
 
-  function openForm(id = null) {
-    editingId = id;
-    const item = expenses.find(expense => expense.id === id);
-    $('formTitle').textContent = item ? 'Edit expense' : 'Add expense';
-    $('save').textContent = item ? 'Update expense' : 'Save expense';
-    $('amount').value = item ? item.amount : '';
-    $('description').value = item ? item.description : '';
-    $('date').value = item ? item.date : localDate();
-    show('form');
-    setTimeout(() => $('amount').focus(), 80);
-  }
+        <p class="footnote">
+          Expenses are stored privately in IndexedDB in this browser, for this site address. They are never uploaded and do not sync between devices. Export a backup to move them somewhere else.
+        </p>
+      </section>
+    </main>
 
-  function handleRowAction(event) {
-    const editButton = event.target.closest('[data-edit]');
-    const deleteButton = event.target.closest('[data-delete]');
-    if (editButton) { openForm(editButton.dataset.edit); return; }
-    if (deleteButton) {
-      const item = expenses.find(expense => expense.id === deleteButton.dataset.delete);
-      if (item && confirm(`Delete "${item.description}" (${money(Number(item.amount))})?`)) {
-        expenses = expenses.filter(expense => expense.id !== item.id);
-        if (saveExpenses()) { renderHome(); renderHistory(); say('Expense deleted.'); }
-      }
-    }
-  }
+    <nav class="dock" id="dock" aria-label="Primary">
+      <button class="dock__tab is-active" type="button" data-view="home" aria-current="page">
+        <svg class="icon" aria-hidden="true"><use href="#i-home"></use></svg>
+        <span>Home</span>
+      </button>
+      <button class="dock__add" type="button" id="addExpenseButton" aria-label="Add expense">
+        <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+      </button>
+      <button class="dock__tab" type="button" data-view="history">
+        <svg class="icon" aria-hidden="true"><use href="#i-history"></use></svg>
+        <span>History</span>
+      </button>
+    </nav>
+  </div>
 
-  $('periods').addEventListener('click', event => {
-    const button = event.target.closest('[data-period]');
-    if (!button) return;
-    selectedPeriod = button.dataset.period;
-    renderHome();
-  });
-  $('recent').addEventListener('click', handleRowAction);
-  $('historyList').addEventListener('click', handleRowAction);
-  $('add').addEventListener('click', () => openForm());
-  $('seeAll').addEventListener('click', () => show('history'));
-  $('homeTab').addEventListener('click', () => show('home'));
-  $('historyTab').addEventListener('click', () => show('history'));
-  $('back').addEventListener('click', () => show('home'));
-  $('cancel').addEventListener('click', () => show('home'));
-  $('search').addEventListener('input', renderHistory);
+  <dialog class="sheet" id="expenseSheet" aria-labelledby="expenseSheetTitle" aria-describedby="expenseSheetSub">
+    <div class="sheet__grip" aria-hidden="true"></div>
+    <header class="sheet__head">
+      <button class="icon-button" type="button" id="closeExpenseSheet" aria-label="Close">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+      </button>
+      <div class="sheet__titles">
+        <h2 class="sheet__title" id="expenseSheetTitle">Add expense</h2>
+        <p class="sheet__sub" id="expenseSheetSub">Saved on this device</p>
+      </div>
+      <span class="sheet__spacer" aria-hidden="true"></span>
+    </header>
+    <div class="sheet__body">
+      <form id="expenseForm" novalidate>
+        <p class="form-error" id="formError" role="alert" hidden></p>
 
-  $('expenseForm').addEventListener('submit', event => {
-    event.preventDefault();
-    const amount = Number($('amount').value);
-    const description = $('description').value.trim();
-    const date = $('date').value;
-    if (!Number.isFinite(amount) || amount <= 0 || !description || !date) {
-      say('Enter a valid amount, description and date.');
-      return;
-    }
-    if (editingId) {
-      const existing = expenses.find(item => item.id === editingId);
-      if (existing) Object.assign(existing, {amount, description, date});
-    } else {
-      expenses.push({id:`${Date.now().toString(36)}${Math.random().toString(36).slice(2,8)}`, amount, description, date});
-    }
-    if (saveExpenses()) {
-      say(editingId ? 'Expense updated.' : 'Expense saved.');
-      show('home');
-    }
-  });
+        <div class="field">
+          <label for="amountInput">Amount</label>
+          <div class="money-input" id="moneyInputWrap">
+            <span class="money-input__currency" aria-hidden="true">₹</span>
+            <input id="amountInput" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-describedby="amountError" required>
+          </div>
+          <p class="field__error" id="amountError" hidden></p>
+        </div>
 
-  function download(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url; link.download = filename;
-    document.body.appendChild(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-  }
+        <div class="field">
+          <label for="descriptionInput">What did you spend on?</label>
+          <input id="descriptionInput" name="description" type="text" maxlength="100" autocomplete="off" placeholder="Lunch, petrol, groceries…" aria-describedby="descriptionError" required>
+          <p class="field__error" id="descriptionError" hidden></p>
+        </div>
 
-  $('csv').addEventListener('click', () => {
-    const rows = [['Date','Description','Amount'], ...sorted(expenses).map(item => [item.date,item.description,item.amount])];
-    const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g,'""')}"`).join(',')).join('\r\n');
-    download(new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'}), 'spendly-expenses.csv');
-  });
-  $('backup').addEventListener('click', () => {
-    const backup = {app:'Spendly',version:1,exportedAt:new Date().toISOString(),expenses};
-    download(new Blob([JSON.stringify(backup,null,2)], {type:'application/json'}), 'spendly-backup.json');
-  });
-  $('restore').addEventListener('click', () => $('file').click());
-  $('file').addEventListener('change', async event => {
-    const file = event.target.files[0];
-    if (!file) return;
-    try {
-      const parsed = JSON.parse(await file.text());
-      const candidate = Array.isArray(parsed) ? parsed : parsed.expenses;
-      if (!Array.isArray(candidate) || !candidate.every(validExpense)) throw new Error('Invalid backup');
-      if (confirm(`Restore ${candidate.length} expenses? This replaces the records currently on this device.`)) {
-        expenses = candidate.map(item => ({id:String(item.id || `${Date.now()}${Math.random()}`),amount:Number(item.amount),description:item.description,date:item.date}));
-        if (saveExpenses()) { renderHome(); renderHistory(); say('Backup restored.'); }
-      }
-    } catch {
-      say('That backup file is invalid. No changes were made.');
-    } finally {
-      event.target.value = '';
-    }
-  });
+        <div class="field">
+          <label for="dateInput">Date</label>
+          <input id="dateInput" name="date" type="date" required aria-describedby="dateError">
+          <div class="quick-dates" role="group" aria-label="Quick dates">
+            <button class="quick-date" type="button" data-quick-date="today" aria-pressed="false">Today</button>
+            <button class="quick-date" type="button" data-quick-date="yesterday" aria-pressed="false">Yesterday</button>
+          </div>
+          <p class="field__error" id="dateError" hidden></p>
+        </div>
 
-  loadExpenses();
-  show('home');
+        <button class="button button--primary button--block" type="submit" id="saveButton">Save expense</button>
+        <p class="form-note">
+          <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
+          Stored in this browser only. Nothing is uploaded.
+        </p>
+      </form>
+    </div>
+  </dialog>
 
-  // Register the service worker only on HTTPS or localhost.
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js').catch(error => console.warn('Offline support could not be enabled:', error));
-    });
-  }
-})();
-</script>
+  <dialog class="sheet sheet--actions" id="actionSheet" aria-labelledby="actionTitle" aria-describedby="actionMessage">
+    <div class="sheet__grip" aria-hidden="true"></div>
+    <div class="sheet__body sheet__body--actions">
+      <h2 class="action__title" id="actionTitle">Actions</h2>
+      <p class="action__message" id="actionMessage" hidden></p>
+      <div class="action__list" id="actionList"></div>
+      <button class="button button--quiet button--block" type="button" id="actionCancel">Cancel</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <svg class="icon toast__icon" aria-hidden="true"><use href="#i-check"></use></svg>
+    <p class="toast__message" id="toastMessage"></p>
+    <button class="toast__action" type="button" id="toastAction" hidden>Undo</button>
+  </div>
+
+  <script type="module" src="./js/app.js"></script>
 </body>
 </html>
