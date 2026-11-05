@@ -1211,6 +1211,16 @@ await run('legacy v2 transactions allocate by entry timestamp and unmatched rows
   assert.deepEqual(marker.unresolvedSavingIds, ['legacy-unmatched-saving']);
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(39800));
 
+  await page.locator('[data-view="expenses"]').click();
+  await page.locator('#historyList [data-edit="legacy-unmatched-expense"]').click();
+  await page.locator('#expenseSheet').waitFor({ state: 'visible' });
+  await page.locator('#paidFromSalary').check();
+  await page.locator('#saveButton').click();
+  await page.locator('#expenseSheet').waitFor({ state: 'hidden' });
+  assert.match(await page.locator('#historyList [data-edit="legacy-unmatched-expense"]').innerText(), /Salary/);
+  const explicitlyAssigned = await dbSnapshot(page);
+  assert.equal(explicitlyAssigned.records.find(record => record.id === 'legacy-unmatched-expense').salaryRecordId, 'salary-nov');
+
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
   const reloaded = await dbSnapshot(page);

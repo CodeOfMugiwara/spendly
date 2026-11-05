@@ -812,15 +812,13 @@ export class FinancialLedgerRepository {
       const source = input.paymentSource === 'savings' ? 'savings' : 'salary';
       const withdrawal = snapshots.savings.find(record => record.type === 'withdrawal' && record.expenseId === id);
       const activeSalary = findActiveSalary(snapshots.salaries);
-      if (source === 'salary' && existing.paymentSource !== 'savings' && !existing.salaryRecordId) {
-        // Preserve unresolved legacy allocations instead of silently reassigning.
-      } else if (source === 'salary' && existing.paymentSource === 'savings' && !activeSalary) {
+      if (source === 'salary' && !activeSalary) {
         throw new NoActiveSalaryError();
       }
 
       const salaryRecordId = source === 'savings'
         ? null
-        : (existing.paymentSource === 'savings' ? activeSalary?.id ?? null : existing.salaryRecordId);
+        : (existing.paymentSource === 'savings' ? activeSalary.id : existing.salaryRecordId ?? activeSalary.id);
       const expense = {
         ...existing, ...checked.value, paymentSource: source, salaryRecordId,
         ...(salaryRecordId ? { allocationStatus: undefined } : {}),

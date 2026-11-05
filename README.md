@@ -221,7 +221,7 @@ The service worker (`sw.js`) precaches the app shell during install:
 
 Salary and savings are written through the same local repositories as expenses, so every feature works offline exactly as it does online. There are no network calls in any finance path.
 
-**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v9`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
+**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v10`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
 
 Offline use requires **one successful online load first**, over HTTPS or localhost. After that, the app and its local data work without a connection.
 
@@ -362,7 +362,7 @@ If an `origin` already exists, skip `git remote add` and just push. This reposit
 
 ### Updating an existing Netlify site
 
-1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v9`).
+1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v10`).
 2. Commit and push to the branch Netlify watches:
 
 ```bash
