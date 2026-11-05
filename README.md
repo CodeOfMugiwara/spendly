@@ -1,58 +1,100 @@
 # Spendly
 
-A private, offline-first expense tracker built with plain HTML, CSS and JavaScript. No build step, no account, no backend, no API keys.
+A private, offline-first salary, expense and savings tracker built with plain HTML, CSS and JavaScript. No build step, no account, no backend, no API keys.
 
 <p align="center">
-  <img src="screenshots/home-mobile.png" width="260" alt="Spendly dashboard on a phone: this month's total, period totals and recent expenses">
-  <img src="screenshots/add-expense-mobile.png" width="260" alt="Add expense sheet with amount, description and date fields">
-  <img src="screenshots/offline-mobile.png" width="260" alt="Spendly showing the offline banner while keeping expenses available">
+  <img src="screenshots/home-mobile.png" width="200" alt="Spendly dashboard on a phone: monthly spending, salary/expense/savings balance and recent expenses">
+  <img src="screenshots/salary-mobile.png" width="200" alt="Salary page showing the month selector, salary record and salary history">
+  <img src="screenshots/savings-mobile.png" width="200" alt="Savings page showing this month's entries and the accumulated total">
+  <img src="screenshots/add-expense-mobile.png" width="200" alt="Add expense sheet with amount, description and date fields">
 </p>
 
 <p align="center"><em>Sample data shown. The interface is designed for iPhone and also works on desktop.</em></p>
 
-## What changed in this version
+## What changed in 3.0
 
-- **IndexedDB is now the primary storage.** Expenses are validated, saved and read through a repository layer, not directly from the interface.
-- **Existing records migrate automatically.** Expenses stored by older releases under `spendly_expenses_v1` in `localStorage` are imported once, verified, and never deleted from the original key.
-- **Reliable offline app shell.** A versioned service worker precaches the HTML, CSS, JavaScript, manifest and icons, serves the shell offline, and cleans up old caches on activation.
-- **The interface was redesigned** around Apple's Liquid Glass material language: translucent floating navigation and sheets, layered depth, refined typography, and a forest-green identity. Readable data surfaces stay opaque.
-- **All existing features are preserved:** weekly/monthly/three-month/yearly totals, recent expenses, full searchable history, editing, deletion, CSV export, JSON backup and restore.
-- **Connectivity is visible** without claiming any cloud sync, because there is none.
+Spendly grew from a single-page expense tracker into a personal finance tracker with **four dedicated pages** and one financial rule:
+
+> **Remaining balance = this month's salary − this month's expenses − this month's savings**
+
+- **Dashboard, Expenses, Salary and Savings are separate pages**, connected by a persistent four-tab Liquid Glass dock. A floating add button records expenses from anywhere.
+- **Manual monthly salary.** One record per calendar month, with a month/year picker, optional notes, editing, history and no duplicates. A month may deliberately have no salary.
+- **Savings are first-class records.** They live in their own IndexedDB store and are never added to the expense ledger or expense analytics.
+- **The dashboard has a compact monthly overview**: salary, expenses, savings and remaining balance for the selected month, with previous/next navigation and shortcuts to Salary and Savings.
+- **IndexedDB moved from v1 to v2** with a safe, additive upgrade. The existing `expenses` store is never dropped, cleared or rewritten; existing expenses are preserved exactly.
+- **Money arithmetic uses integer paise** internally, so salary, savings and remaining balances never drift through floating-point addition.
+- **Backups are version 3** and include expenses, salaries and savings. Older expense-only backups still restore without touching salary or savings.
+- **All earlier features are preserved:** weekly/monthly/three-month/yearly totals, daily average, recent expenses, searchable history, editing, deletion with Undo, CSV export, JSON backup/restore and offline-first PWA behaviour.
 
 ## Features
 
+### Dashboard
+- This month's spending hero with transaction count and daily average.
+- Monthly overview card: salary, expenses, savings and remaining balance for any selected month.
+- Previous/next month navigation that recalculates from that month's records only.
+- Shortcuts to Salary and Savings.
+- Weekly bar chart (Monday–Sunday), period totals (week, month, rolling 3 months, year) and all-time total.
+- Recent expenses, Install tip and offline state.
+
+### Expenses
 - Add, edit and delete expenses with Indian Rupee formatting (`en-IN`, ₹).
-- Weekly total from Monday to Sunday, current month, rolling three calendar months, current year, all-time total and transaction count.
-- Daily average for the selected period, based on elapsed calendar days.
-- Five most recent expenses, month-grouped history with subtotals, and search across description, date, month and amount.
-- Undo after deleting an expense.
-- CSV export, JSON backup, and validated backup restore with an automatic safety copy and undo.
+- Month-grouped history with subtotals, search across description/date/month/amount, and Undo after delete.
+- CSV export (expenses only) for Excel or Google Sheets.
+- Version 3 JSON backup and validated restore with a safety copy and Undo.
+
+### Salary
+- One salary record per month, entered by hand in ₹.
+- **Month navigator** at the top: previous/next arrows, the selected month and year, and a tap-to-open month + year picker for jumping anywhere.
+- **Current month** shortcut appears as soon as you look at another month, and returns you to today in one tap.
+- A small slide animation on the amount when the month changes; Left/Right arrow keys move between months when the navigator has focus.
+- Live expenses/savings/remaining split for the selected month, recalculated from the stored records on every change.
+- Notes, salary history, edit and remove (with confirmation and Undo).
+- A month without a salary is shown as **Not configured**, never as a fake balance.
+- Navigating never writes a record: browsing future or empty months cannot create a salary.
+
+### Savings
+- **This month** tab: total saved, entry count, individual entries with dates and notes, add/edit/delete.
+- **Total** tab: accumulated total across all months, growth versus the previous month, month-by-month navigation and an all-month list.
+- Deleting a savings entry asks for confirmation and still offers Undo.
+- Savings never appear in expense history, expense totals or CSV exports.
+
+### Platform
 - Installable PWA with offline launch, iPhone Home Screen support and app shortcuts.
-- Local-first: all expenses stay in the browser for this site address.
+- Local-first: all data stays in the browser for this site address. Nothing is uploaded.
+- iPhone-safe layout: safe areas, 44 px+ touch targets, native-feeling sheets, no horizontal overflow.
 
 ## Project structure
 
 ```text
 Spendly/
-├── index.html                 # App shell, accessible markup and SVG icon sprite
+├── index.html                 # Four pages, accessible markup, SVG icon sprite, sheets
 ├── css/
 │   └── app.css                # Liquid Glass design system and responsive layout
 ├── js/
-│   ├── core.js                # Pure date, money, validation, search and summary rules
-│   ├── db.js                  # The only IndexedDB adapter (stores and indexes)
-│   ├── repository.js          # Expense repository, timestamps, validation, migration
+│   ├── core.js                # Pure dates, month keys, paise, validation, finance rules
+│   ├── db.js                  # The only IndexedDB adapter (v1 → v2 schema)
+│   ├── repository.js          # Expense, Salary and Savings repositories + migration
 │   └── app.js                 # UI rendering and interaction (never touches IndexedDB)
 ├── sw.js                      # Precache + offline shell + safe update flow
 ├── manifest.json              # PWA metadata, icons and shortcuts
 ├── netlify.toml               # Static publish config and cache/security headers
 ├── icons/                     # App icons (180, 192, 512, maskable)
 ├── screenshots/               # Documentation screenshots
+├── context/                   # Append/update-only project context for future agents
+│   ├── architecture.md
+│   ├── data-model.md
+│   ├── design-system.md
+│   ├── testing.md
+│   └── roadmap.md
+├── memory.md                  # Append/update-only project memory (decisions, issues, fixes)
 ├── tests/
 │   ├── server.mjs             # Zero-dependency local static server
-│   ├── e2e.mjs                # Playwright browser suite
+│   ├── e2e.mjs                # Playwright browser suite (13 scenarios)
 │   └── unit/
 │       ├── core.test.mjs
-│       └── repository.test.mjs
+│       ├── repository.test.mjs
+│       ├── finance.test.mjs
+│       └── finance-repository.test.mjs
 ├── package.json               # Test scripts only; the app needs no dependencies
 ├── .gitignore
 └── README.md
@@ -87,7 +129,16 @@ For installation on an actual iPhone, the site must be served over **HTTPS** (Ne
 npm test
 ```
 
-This runs 29 tests covering calendar bounds, Monday-start weeks, rolling three-month windows, leap/real-date validation, money parsing, search, month grouping, stable ordering, legacy ID timestamps, migration idempotency, duplicate handling, verification failure and atomic replacement.
+54 tests cover:
+
+- calendar bounds, Monday-start weeks, rolling three-month windows and leap/real-date validation;
+- month keys (validation, derivation, shifting across year boundaries, month length);
+- integer-paise conversion and exact `0.1 + 0.2` style arithmetic;
+- expense, salary and savings validation and record normalisation;
+- the monthly rule: only that month's expenses and savings are deducted, nothing carries forward, negative balances stay exact;
+- salary repositories: one record per month, duplicate rejection (including the IndexedDB constraint path), independent edits, Undo and backup replacement;
+- savings repositories: date-derived months, editing across months, deletion/restore, totals and per-month grouping;
+- legacy `localStorage` migration idempotency, duplicate handling and verification failure.
 
 ### Browser end-to-end tests
 
@@ -110,9 +161,18 @@ The suite starts its own server and verifies:
 2. Add, edit, delete, undo, search, CSV export, JSON backup, invalid restore rejection and valid restore with undo.
 3. The service worker caches every shell asset; the app relaunches offline, then adds/edits/deletes/searches/exports/restores offline, and reopens in a new tab while still offline.
 4. Expenses and the cached app shell survive a **full browser restart** using a persistent browser profile, including an offline reload afterwards.
-5. The iPhone install hint appears and stays dismissed after reload.
-6. Layouts at 320 px mobile, 390 px mobile and 1440 px desktop, without horizontal overflow.
-7. Screenshots are regenerated in `screenshots/`.
+5. Salary + savings + expenses produce the expected remaining balance, and that balance updates after adding, editing and deleting each record type.
+6. Salary months stay independent; duplicates are blocked with a visible error; future months can be selected.
+7. The Salary month navigator: the picker jumps to a month, **Current month** returns, navigating creates no records, and a sheet reopened mid-close still opens on screen.
+8. A month with no salary shows **Not configured / —** instead of a balance, and overspending shows a clear negative balance.
+9. Savings history spans months, month-by-month navigation works, growth is computed against the previous month, and savings never appear in expenses.
+10. A hand-built **version 1 IndexedDB database** upgrades to v2 with its expense intact, and salary/savings stores are created alongside it.
+11. Salary and savings can be added and read while fully offline, then survive an offline reload.
+12. The iPhone install hint appears and stays dismissed after reload.
+13. Layouts at 320 px mobile, 390 px mobile and 1440 px desktop, without horizontal overflow.
+14. Screenshots are regenerated in `screenshots/`.
+
+That is 15 browser scenarios plus 54 unit tests.
 
 The run finishes with a pass/fail summary and fails if the browser console reports an error. Temporary test files go to `test-results/` (ignored by Git).
 
@@ -121,11 +181,20 @@ The run finishes with a pass/fail summary and fails if the browser console repor
 Automation cannot cover real iOS behaviour. Before shipping, check:
 
 - [ ] Install the previous release with a few real expenses, download a backup, deploy this version, then open it. Confirm every expense is present, totals match, and no duplicates appear after two reloads.
-- [ ] In DevTools → Application → Storage, confirm `spendly_expenses_v1` still exists after migration and the `spendly` IndexedDB database contains the records.
-- [ ] Go offline (DevTools → Network → Offline) after one online load. Reload, add, edit, delete, search, export CSV, download a backup and restore it. Close the tab and reopen it while still offline.
-- [ ] On an iPhone in Safari, tap **Share → Add to Home Screen**, open Spendly from the icon, and check the notch/Dynamic Island spacing and bottom safe area.
-- [ ] In standalone mode, open the add-expense sheet with the keyboard visible, switch dates, save, and confirm the dock and sheet do not overlap important controls.
-- [ ] Test VoiceOver labels for Home/History, period tiles, expense rows, the more-actions button and sheet fields.
+- [ ] In DevTools → Application → Storage, confirm `spendly_expenses_v1` still exists after migration, the `spendly` database is version 2, and `expenses`, `salaries`, `savings` and `meta` all exist.
+- [ ] Add a salary for September, October and November. Edit one month and confirm the other two do not change.
+- [ ] Try to create a second salary for the same month; confirm the error appears in the sheet and nothing is saved.
+- [ ] Add two savings entries this month and one for a previous month. Confirm This month shows only this month, Total shows all months, and growth matches the difference.
+- [ ] Add a ₹1,000 expense against a ₹50,000 salary with ₹10,000 saved; confirm the remaining balance is ₹39,000.
+- [ ] Edit the expense to ₹2,000 and confirm ₹38,000; delete it and confirm ₹40,000.
+- [ ] Edit the salary to ₹60,000 and confirm the remaining balance rises by ₹10,000.
+- [ ] Navigate the dashboard overview to a previous month and confirm it shows that month's salary, expenses and savings only.
+- [ ] Select a month with no salary and confirm **Not set / —** is shown, not a negative or zero balance.
+- [ ] Make expenses exceed salary and confirm a red negative remaining balance with an explanatory note.
+- [ ] Go offline (DevTools → Network → Offline) after one online load. Add and edit a salary, add/edit/delete savings, reload, and confirm everything persists.
+- [ ] On an iPhone in Safari, tap **Share → Add to Home Screen**, open Spendly from the icon, and check the notch/Dynamic Island spacing and bottom safe area behind the dock.
+- [ ] In standalone mode, open each sheet with the keyboard visible and confirm the dock never covers the save button or fields.
+- [ ] Test VoiceOver labels for the four dock tabs, the add button, month steppers, period tiles, expense/salary/savings rows and the savings tabs.
 - [ ] Enable Reduce Motion and Reduce Transparency in iOS Accessibility settings and confirm the app remains usable without blur or animation.
 - [ ] Test text at a large accessibility size (or 200% browser zoom) and confirm no controls are clipped.
 - [ ] Deploy an update with a bumped cache version and confirm the “new version is ready” banner appears, then Refresh applies it.
@@ -140,27 +209,28 @@ The service worker (`sw.js`) precaches the app shell during install:
 - Local static assets are served cache-first; unknown same-origin GETs fall back to the network and are cached when successful.
 - Cross-origin requests and non-GET requests are not intercepted.
 - A new service worker waits instead of taking over immediately. Spendly shows a **Refresh** banner, then the new worker activates and old `spendly-*` caches are deleted.
-- The service worker never opens IndexedDB. Updating the app therefore cannot erase expenses.
+- The service worker never opens IndexedDB. Updating the app therefore cannot erase expenses, salary or savings.
 
-**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** For example, `v3` → `v4`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
+Salary and savings are written through the same local repositories as expenses, so every feature works offline exactly as it does online. There are no network calls in any finance path.
+
+**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v8`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
 
 Offline use requires **one successful online load first**, over HTTPS or localhost. After that, the app and its local data work without a connection.
 
-## Connectivity indicator
+## Where data is stored
 
-- Online after the app shell is installed: a subtle green dot with **Available offline**.
-- Online before the shell is ready: **On this device**.
-- Offline: an amber **Offline** pill plus a banner reading **“You’re offline — your expenses are saved on this device.”**
-- Returning online updates the indicator automatically and briefly confirms that expenses are still stored locally. There is no cloud sync, so no message claims otherwise.
+- **Primary storage:** IndexedDB database `spendly`, **version 2**.
+  - `expenses` — keyed by `id`, indexes `by_date`, `by_createdAt`, `by_date_createdAt` (unchanged since v1).
+  - `salaries` — keyed by `id`, **unique** index `by_monthKey`, plus `by_createdAt`. One salary per `YYYY-MM`.
+  - `savings` — keyed by `id`, indexes `by_monthKey`, `by_date`, `by_date_createdAt`.
+  - `meta` — keyed by `key`, used for the legacy migration marker.
+- **Legacy storage:** `localStorage["spendly_expenses_v1"]`. It is read during migration and deliberately **left untouched**.
+- **Small UI preferences** (such as the dismissed install tip) use separate `localStorage` keys; they are not financial data.
 
-## Where expense data is stored
-
-- **Primary storage:** IndexedDB database `spendly`, version 1.
-  - Object store `expenses`, keyed by a stable `id`, with indexes on `date`, `createdAt`, and `[date, createdAt]`.
-  - Object store `meta`, keyed by `key`, used for the migration completion marker.
-- **Record shape:**
+### Record shapes
 
 ```json
+// expenses
 {
   "id": "8d0d5e4a-…",
   "amount": 240,
@@ -169,36 +239,74 @@ Offline use requires **one successful online load first**, over HTTPS or localho
   "createdAt": "2026-11-04T08:20:00.000Z",
   "updatedAt": "2026-11-04T08:20:00.000Z"
 }
+
+// salaries
+{
+  "id": "b0f3…",
+  "monthKey": "2026-11",
+  "amount": 50000,
+  "amountPaise": 5000000,
+  "notes": "Monthly salary",
+  "createdAt": "2026-11-01T04:00:00.000Z",
+  "updatedAt": "2026-11-01T04:00:00.000Z"
+}
+
+// savings
+{
+  "id": "2c91…",
+  "monthKey": "2026-11",
+  "amount": 4000,
+  "amountPaise": 400000,
+  "date": "2026-11-04",
+  "description": "Gold",
+  "createdAt": "2026-11-04T09:10:00.000Z",
+  "updatedAt": "2026-11-04T09:10:00.000Z"
+}
 ```
 
-- **Legacy storage:** `localStorage["spendly_expenses_v1"]`. It is read during migration and deliberately **left untouched**. The original data stays available in the browser even after migration.
-- **Small UI preferences** (such as the dismissed install tip) use separate `localStorage` keys; they are not expense data.
-- **Origin and browser:** data belongs to the exact site origin (for example `https://spendly.netlify.app`) in the exact browser/device where it was entered. It does not follow you to another browser, phone or custom domain.
+`amount` is the display value in rupees; `amountPaise` is the integer source used for every calculation. Both are always derived together on save, so they cannot drift. `monthKey` on a savings record is derived from `date`; calculations prefer the date.
 
-### Automatic migration
+### Monthly calculation rules
 
-On startup, before the UI renders:
+- Only expenses whose `date` falls in the selected `YYYY-MM` are deducted.
+- Only savings whose `date` falls in that month are deducted.
+- Nothing is carried forward; historical months remain accurate when viewed later.
+- If no salary exists for the month, the UI shows **Not set / —** and never presents a remaining balance.
+- A negative remaining balance is displayed clearly in red with an explanation.
+- All sums use integer paise.
 
-1. Spendly checks for a completed migration marker in IndexedDB. If present, it stops.
-2. Otherwise it reads `spendly_expenses_v1`, parses and validates each record against the real schema.
-3. Record ids are preserved, and `createdAt` is recovered from the original timestamp-based id where possible (or from the expense date).
-4. Missing ids are only generated for imported backups, never for normal records.
-5. Records are written with `put` semantics by id, so a repeated run cannot duplicate them. Existing IndexedDB records win over an older copy in `localStorage`.
-6. Spendly reads the records back and verifies every id exists before writing the `migration:localStorage:v1` completion marker.
-7. If verification fails, the marker is not written, the original data remains, and the app continues with whatever is already in IndexedDB.
+### Database upgrade (v1 → v2)
 
-There is also a recovery benefit: if IndexedDB is cleared but `localStorage` remains, the next load attempts a fresh migration.
+The upgrade runs inside IndexedDB's `onupgradeneeded` transaction:
+
+1. Existing `expenses` and `meta` stores are left exactly as they are.
+2. `salaries` and `savings` are created only if missing, with their indexes and the unique salary month rule.
+3. If anything fails, the transaction is aborted, so IndexedDB rolls back to the v1 schema instead of leaving a half-created database.
+4. Nothing is cleared, and no expense records are rewritten.
+
+The browser suite builds a real v1 database before loading the app and asserts the expense survives the upgrade and appears in the UI.
+
+### Automatic legacy migration
+
+Separately from the schema upgrade, the existing expense migration still runs once:
+
+1. Spendly checks for the `migration:localStorage:v1` marker in `meta`; if present, it stops.
+2. Otherwise it reads `spendly_expenses_v1`, validates every record, preserves ids and recovers `createdAt` from the old timestamp-based id where possible.
+3. Records are written by id, so a repeated run cannot duplicate them; existing IndexedDB records win.
+4. Spendly reads the records back and verifies every id exists before writing the completion marker.
+5. The original `localStorage` value is never modified.
 
 ## Exporting and restoring backups
 
-Open **History → Your data**.
+Open **Expenses → Your data**.
 
-- **Export CSV** downloads a spreadsheet-friendly file with the date, description and amount in INR. It includes a UTF-8 BOM so Excel reads ₹ correctly.
-- **Download backup** downloads a complete JSON file (`app`, `version`, `exportedAt`, `expenses`). Keep this somewhere safe.
-- **Restore backup** validates the whole file before asking for confirmation. The confirmation shows the current and incoming counts. Spendly downloads a safety copy of the current expenses, then replaces the whole collection in one atomic IndexedDB transaction. A restore can be undone immediately from the toast.
-- Invalid JSON, wrong shapes, corrupt records and files over 10 MB are rejected without changing any data.
+- **Export CSV** downloads expenses only (date, description, amount) with a UTF-8 BOM so Excel reads ₹ correctly. Salary and savings are intentionally excluded.
+- **Download backup** downloads a JSON file stamped `version: 3` containing `expenses`, `salaries` and `savings`.
+- **Restore backup** validates the whole file before asking for confirmation. It downloads a safety copy of the current data, then replaces expenses and — when present in the file — salary and savings too. A restore can be undone immediately from the toast.
+- Expense-only backups from older releases still restore: their missing `salaries`/`savings` keys leave local salary and savings untouched.
+- Invalid JSON, wrong shapes, corrupt records, duplicate salary months and files over 10 MB are rejected without changing any data.
 
-Restoring **replaces** the current collection; it does not merge. The safety copy and Undo are there to make that reversible.
+Restoring **replaces** the included collections; it does not merge. The safety copy and Undo make that reversible.
 
 ## Install on iPhone
 
@@ -208,7 +316,7 @@ Restoring **replaces** the current collection; it does not merge. The safety cop
 4. Launch Spendly from the Home Screen. It opens in standalone mode with the correct status-bar, notch and bottom safe-area spacing.
 5. Open it online once so the service worker installs the shell. After that, it opens offline.
 
-On supported desktop/Android browsers, Spendly may also offer an **Install app** prompt after the first expense.
+On supported desktop/Android browsers, Spendly may also offer an **Install app** prompt after the first record.
 
 ## Deploy to Netlify
 
@@ -227,7 +335,7 @@ The repository already includes `netlify.toml`:
 ```bash
 git status
 git add -A
-git commit -m "Upgrade Spendly to offline-first IndexedDB and iOS Liquid Glass UI"
+git commit -m "Add salary and savings management with four-page Liquid Glass UI"
 git remote add origin https://github.com/<your-account>/spendly.git
 git push -u origin main
 ```
@@ -241,7 +349,7 @@ If an `origin` already exists, skip `git remote add` and just push. This reposit
 
 ### Updating an existing Netlify site
 
-1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets.
+1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v8`).
 2. Commit and push to the branch Netlify watches:
 
 ```bash
@@ -251,7 +359,7 @@ git push origin main
 ```
 
 3. Netlify deploys automatically. If auto-publishing is off, use **Deploys → Trigger deploy → Deploy site**.
-4. Open the site online once. If the update banner appears, tap **Refresh**. Reload once more if Safari had an older shell cached.
+4. Open the site online once and hard-reload if needed. If the update banner appears, tap **Refresh**.
 
 The site URL is in Netlify under **Domain management**. Reinstalling from the Home Screen is not necessary for normal updates; the service worker refreshes the shell.
 
@@ -261,34 +369,45 @@ The site URL is in Netlify under **Domain management**. Reinstalling from the Ho
 UI (js/app.js)
       │  only calls repository methods
       ▼
-ExpenseRepository (js/repository.js)
-      │  validation, stable ids, timestamps, migration, atomic replace
+ExpenseRepository · SalaryRepository · SavingsRepository (js/repository.js)
+      │  validation, stable ids, timestamps, duplicate rules, atomic replace
       ▼
-IndexedDBExpenseStore (js/db.js)
+IndexedDBExpenseStore · IndexedDBSalaryStore · IndexedDBSavingsStore (js/db.js)
       │  the only IndexedDB-aware code
       ▼
-Browser IndexedDB
+Browser IndexedDB (spendly v2)
 ```
 
-Pure date/money/summary rules live in `js/core.js` and are shared by the UI and tests.
+Pure date/month/paise/finance rules live in `js/core.js` and are shared by the UI and tests. Each repository owns one store, and the UI never knows which one to call for a calculation: it asks `computeMonthlyFinance()` for the month.
 
 This structure intentionally leaves a seam for a future remote adapter. Records already have stable ids and `createdAt` / `updatedAt`, and the UI has no knowledge of IndexedDB. A future phase can add a remote store or a sync-aware repository without rewriting the interface. **No sync engine, queue or authentication exists today**, by design.
+
+## Project memory and context
+
+- [`memory.md`](memory.md) — append/update-only log of every feature, decision, issue and fix.
+- [`context/`](context/) — deeper append/update-only documents for architecture, data model, design system, testing and roadmap.
+
+Future agents should read `memory.md` first, then the relevant context file, before changing the app. Both are maintained as append-or-update logs: existing entries are never overwritten or deleted.
 
 ## Limitations and privacy
 
 - **Local only.** No accounts, login, cloud sync, Supabase/Firebase, or API keys. Data does not move between devices.
 - **One origin, one browser.** Changing from a `*.netlify.app` URL to a custom domain creates a new storage origin; export a backup before changing domains and restore it on the new one.
-- **Clearing browser/site data deletes expenses.** So can removing the installed app's website data or using private browsing. Spendly requests persistent storage where supported, but browsers can still evict data.
+- **Clearing browser/site data deletes everything.** So can removing the installed app's website data or using private browsing. Spendly requests persistent storage where supported, but browsers can still evict data.
 - **Backups are essential.** Download a JSON backup regularly.
 - **Offline requires a first online visit.** The service worker only exists after one successful load over HTTPS/localhost.
 - **Restore replaces, it does not merge.** Use it to restore a full backup, with the safety copy and Undo as guard rails.
+- **One salary per month.** That is enforced by a unique IndexedDB index; a duplicate is rejected with a clear message.
+- **Savings dates cannot be in the future.** A savings entry records money already set aside. Salary months, by contrast, may be past or future.
+- **The salary month picker covers six years back and three years forward** relative to the current year. Older records still display correctly if restored from a backup.
 - **No live cross-tab sync.** A second tab sees changes after reload.
 - **Light theme only.** The design is optimised for Spendly's white-and-forest identity and does not currently ship a dark theme.
 - **Modern browser needed.** The interface uses native `<dialog>`, `:has()` and `backdrop-filter`; iOS 15.4+ and current Safari/Chrome/Edge are supported.
 - **Large histories render as one list.** This is intentionally simple for a personal tracker; there is no virtualisation.
 - **CSV/JSON downloads on iOS** may open the Files share sheet instead of saving directly, depending on Safari settings.
-- **Your source code is public if the GitHub repository is public.** Do not put personal expenses, credentials or keys in the repository. Expenses live only in the browser, not in the repo.
+- **Your source code is public if the GitHub repository is public.** Do not put personal financial data, credentials or keys in the repository. Records live only in the browser, not in the repo.
 
 ## License
 
 No license file is included. Add one if you plan to distribute the project.
+

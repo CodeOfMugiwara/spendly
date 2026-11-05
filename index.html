@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#176b3a">
   <meta name="color-scheme" content="light">
-  <meta name="description" content="Spendly is a private, offline-first expense tracker. Your expenses are saved on this device.">
+  <meta name="description" content="Spendly is a private, offline-first expense, salary and savings tracker. Everything is saved on this device.">
   <meta name="format-detection" content="telephone=no">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -15,7 +15,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png">
   <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
   <link rel="stylesheet" href="./css/app.css">
-  <title>Spendly — Expense Tracker</title>
+  <title>Spendly — Salary, Spending &amp; Savings</title>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -23,7 +23,7 @@
   <noscript>
     <div class="noscript">
       <strong>Spendly needs JavaScript.</strong>
-      Your expenses are stored privately in this browser, so the app cannot run until JavaScript is enabled.
+      Your data is stored privately in this browser, so the app cannot run until JavaScript is enabled.
     </div>
   </noscript>
 
@@ -51,6 +51,9 @@
     <symbol id="i-chevron" viewBox="0 0 24 24">
       <path d="m9 5.5 6.5 6.5L9 18.5"/>
     </symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24">
+      <path d="m6 9.5 6 6 6-6"/>
+    </symbol>
     <symbol id="i-x" viewBox="0 0 24 24">
       <path d="M6 6l12 12M18 6 6 18"/>
     </symbol>
@@ -73,6 +76,11 @@
     <symbol id="i-calendar" viewBox="0 0 24 24">
       <rect x="4" y="5.5" width="16" height="15" rx="3"/>
       <path d="M8 3.5v4M16 3.5v4M4 10h16"/>
+    </symbol>
+    <symbol id="i-calendar-dot" viewBox="0 0 24 24">
+      <rect x="4" y="5.5" width="16" height="15" rx="3"/>
+      <path d="M8 3.5v4M16 3.5v4M4 10h16"/>
+      <circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none"/>
     </symbol>
     <symbol id="i-download" viewBox="0 0 24 24">
       <path d="M12 3.5v11.5m0 0 4.2-4.2M12 15l-4.2-4.2"/>
@@ -106,6 +114,19 @@
       <circle cx="12" cy="12" r="8.5"/>
       <path d="M12 11v5.5M12 7.7v.2"/>
     </symbol>
+    <symbol id="i-rupee" viewBox="0 0 24 24">
+      <path d="M7 4.5h10M7 8.6h10"/>
+      <path d="M15.6 4.5c0 3.2-2.1 5.3-5.4 5.3H7l8 9.7"/>
+    </symbol>
+    <symbol id="i-savings" viewBox="0 0 24 24">
+      <path d="M5 11.4c0-2.9 3.1-5.2 7-5.2s7 2.3 7 5.2-3.1 5.2-7 5.2-7-2.3-7-5.2z"/>
+      <path d="M5 11.4v4.1c0 2.9 3.1 5.2 7 5.2s7-2.3 7-5.2v-4.1"/>
+      <path d="M12 2.6v2.3M10.2 3.8h3.6"/>
+    </symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24">
+      <path d="M4 16.4 9.6 10.8l3.4 3.4L20 7.2"/>
+      <path d="M15.2 7.2H20v4.8"/>
+    </symbol>
   </svg>
 
   <div class="app">
@@ -115,10 +136,10 @@
           <span class="brand__mark" aria-hidden="true">S<i></i></span>
           <span class="brand__text">
             <span class="brand__name">Spendly<span class="brand__dot">.</span></span>
-            <span class="brand__tag">Private expense tracker</span>
+            <span class="brand__tag">Salary, spending &amp; savings</span>
           </span>
         </div>
-        <div class="connection" id="connection" data-state="online" title="Where your expenses are saved">
+        <div class="connection" id="connection" data-state="online" title="Where your data is saved">
           <span class="connection__dot" aria-hidden="true"></span>
           <span id="connectionText">On this device</span>
         </div>
@@ -139,12 +160,15 @@
     <main class="main" id="main" tabindex="-1">
       <div class="fatal" id="fatalError" role="alert" hidden>
         <strong>Spendly couldn’t open its local database.</strong>
-        <p id="fatalMessage">Your expenses have not been deleted. Reload the page to try again.</p>
+        <p id="fatalMessage">Your data has not been deleted. Reload the page to try again.</p>
         <button class="button button--quiet" type="button" id="reloadButton">Reload Spendly</button>
       </div>
 
-      <section class="view" id="view-home" aria-labelledby="homeTitle">
-        <h1 class="visually-hidden" id="homeTitle">Spendly dashboard</h1>
+      <!-- ================================================================== -->
+      <!-- Dashboard                                                          -->
+      <!-- ================================================================== -->
+      <section class="view" id="view-dashboard" aria-labelledby="dashboardTitle">
+        <h1 class="visually-hidden" id="dashboardTitle">Spendly dashboard</h1>
 
         <section class="hero" aria-labelledby="heroLabel">
           <div class="hero__glow" aria-hidden="true"></div>
@@ -168,10 +192,68 @@
           </div>
         </section>
 
+        <section class="section" id="financeSection" aria-labelledby="financeTitle">
+          <div class="section__head">
+            <h2 class="section__title" id="financeTitle">Monthly overview</h2>
+            <div class="month-stepper" role="group" aria-label="Choose a month">
+              <button class="month-stepper__button is-prev" type="button" id="financePrevMonth" aria-label="Previous month">
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+              </button>
+              <span class="month-stepper__label" id="financeMonthLabel" aria-live="polite">November 2026</span>
+              <button class="month-stepper__button" type="button" id="financeNextMonth" aria-label="Next month">
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="finance" id="financeCard">
+            <div class="finance__grid">
+              <div class="finance__cell">
+                <span class="finance__label">Salary</span>
+                <strong class="finance__value" id="financeSalary">Not set</strong>
+              </div>
+              <div class="finance__cell">
+                <span class="finance__label">Expenses</span>
+                <strong class="finance__value" id="financeExpenses">₹0.00</strong>
+              </div>
+              <div class="finance__cell">
+                <span class="finance__label">Savings</span>
+                <strong class="finance__value" id="financeSavings">₹0.00</strong>
+              </div>
+            </div>
+            <div class="finance__balance" id="financeBalance">
+              <div class="finance__balance-text">
+                <span class="finance__balance-label">Remaining balance</span>
+                <strong class="finance__balance-value" id="financeRemainingValue">—</strong>
+              </div>
+              <p class="finance__note" id="financeRemainingNote">Add this month’s salary to see what is left.</p>
+            </div>
+          </div>
+
+          <div class="shortcuts">
+            <button class="shortcut" type="button" data-goto="salary">
+              <span class="shortcut__icon" aria-hidden="true"><svg class="icon"><use href="#i-rupee"></use></svg></span>
+              <span class="shortcut__text">
+                <strong>Salary</strong>
+                <small id="shortcutSalary">Not set for this month</small>
+              </span>
+              <svg class="icon shortcut__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <button class="shortcut" type="button" data-goto="savings">
+              <span class="shortcut__icon shortcut__icon--soft" aria-hidden="true"><svg class="icon"><use href="#i-savings"></use></svg></span>
+              <span class="shortcut__text">
+                <strong>Savings</strong>
+                <small id="shortcutSavings">₹0.00 saved this month</small>
+              </span>
+              <svg class="icon shortcut__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+          </div>
+        </section>
+
         <section class="section" id="glanceSection" aria-labelledby="glanceTitle">
           <div class="section__head">
-            <h2 class="section__title" id="glanceTitle">At a glance</h2>
-            <span class="section__hint">Saved totals</span>
+            <h2 class="section__title" id="glanceTitle">Spending at a glance</h2>
+            <span class="section__hint">All periods</span>
           </div>
           <div class="glance" id="periodTiles" role="group" aria-label="Choose a spending period">
             <button class="glance__tile" type="button" data-period="week" aria-pressed="false">
@@ -239,10 +321,13 @@
         </aside>
       </section>
 
-      <section class="view" id="view-history" aria-labelledby="historyTitle" hidden>
+      <!-- ================================================================== -->
+      <!-- Expenses                                                           -->
+      <!-- ================================================================== -->
+      <section class="view" id="view-expenses" aria-labelledby="expensesTitle" hidden>
         <header class="page-head">
           <p class="eyebrow">Ledger</p>
-          <h1 class="page-head__title" id="historyTitle">History</h1>
+          <h1 class="page-head__title" id="expensesTitle">Expenses</h1>
           <p class="page-head__sub">Every expense, saved on this device.</p>
         </header>
 
@@ -281,17 +366,17 @@
           <div class="data__actions">
             <button class="data__action" type="button" id="exportCsv">
               <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-table"></use></svg></span>
-              <span class="data__text"><strong>Export CSV</strong><small>For Excel or Google Sheets</small></span>
+              <span class="data__text"><strong>Export CSV</strong><small>Expenses, for Excel or Google Sheets</small></span>
               <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
             </button>
             <button class="data__action" type="button" id="downloadBackup">
               <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-download"></use></svg></span>
-              <span class="data__text"><strong>Download backup</strong><small>A complete copy as JSON</small></span>
+              <span class="data__text"><strong>Download backup</strong><small>Expenses, salary and savings as JSON</small></span>
               <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
             </button>
             <button class="data__action" type="button" id="restoreBackup">
               <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-upload"></use></svg></span>
-              <span class="data__text"><strong>Restore backup</strong><small>Replace expenses from a JSON file</small></span>
+              <span class="data__text"><strong>Restore backup</strong><small>Replace local data from a JSON file</small></span>
               <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
             </button>
             <input id="fileInput" type="file" accept="application/json,.json" hidden>
@@ -299,26 +384,189 @@
         </section>
 
         <p class="footnote">
-          Expenses are stored privately in IndexedDB in this browser, for this site address. They are never uploaded and do not sync between devices. Export a backup to move them somewhere else.
+          Everything is stored privately in IndexedDB in this browser, for this site address. It is never uploaded and does not sync between devices. Export a backup to move it somewhere else.
+        </p>
+      </section>
+
+      <!-- ================================================================== -->
+      <!-- Salary                                                             -->
+      <!-- ================================================================== -->
+      <section class="view" id="view-salary" aria-labelledby="salaryTitle" hidden>
+        <header class="page-head">
+          <p class="eyebrow">Income</p>
+          <h1 class="page-head__title" id="salaryTitle">Salary</h1>
+          <p class="page-head__sub">What you earned each month — one record per month.</p>
+        </header>
+
+        <section class="income-card" aria-labelledby="salaryMonthLabel">
+          <div class="income-card__head">
+            <button class="month-stepper__button is-prev" type="button" id="salaryPrevMonth" aria-label="Previous month">
+              <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <button class="income-card__titles income-card__titles--button" type="button" id="salaryMonthPickerButton" aria-haspopup="dialog" aria-label="Choose a month and year">
+              <span class="income-card__label-row">
+                <span class="income-card__label" id="salaryMonthLabel" aria-live="polite">November 2026</span>
+                <svg class="icon income-card__caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              </span>
+              <span class="income-card__hint" id="salaryMonthHint">Current month</span>
+            </button>
+            <button class="month-stepper__button" type="button" id="salaryNextMonth" aria-label="Next month">
+              <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+          </div>
+
+          <div class="income-card__now" id="salaryNowRow" hidden>
+            <button class="chip-button" type="button" id="salaryCurrentMonth">
+              <svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg>
+              Current month
+            </button>
+          </div>
+
+          <p class="income-card__amount" id="salaryAmount">₹0.00</p>
+          <p class="income-card__notes" id="salaryNotes" hidden></p>
+          <p class="income-card__status" id="salaryStatus">No salary recorded for this month.</p>
+
+          <div class="income-card__split" id="salarySplit" aria-live="polite"></div>
+
+          <div class="income-card__actions">
+            <button class="button button--primary button--block" type="button" id="salaryEditButton">Add salary</button>
+            <button class="button button--quiet button--block" type="button" id="salaryClearButton" hidden>Remove salary</button>
+          </div>
+        </section>
+
+        <section class="section" aria-labelledby="salaryHistoryTitle">
+          <div class="section__head">
+            <h2 class="section__title" id="salaryHistoryTitle">Salary history</h2>
+            <span class="section__hint" id="salaryHistoryCount"></span>
+          </div>
+          <div id="salaryList"></div>
+        </section>
+
+        <p class="footnote">
+          Salary is entered by hand for each month. Editing one month never changes another month, and a month can be left without a salary.
+        </p>
+      </section>
+
+      <!-- ================================================================== -->
+      <!-- Savings                                                            -->
+      <!-- ================================================================== -->
+      <section class="view" id="view-savings" aria-labelledby="savingsTitle" hidden>
+        <header class="page-head">
+          <p class="eyebrow">Set aside</p>
+          <h1 class="page-head__title" id="savingsTitle">Savings</h1>
+          <p class="page-head__sub">Money you kept — separate from expenses.</p>
+        </header>
+
+        <div class="segmented" role="tablist" aria-label="Savings views">
+          <button class="segmented__item is-active" type="button" role="tab" id="savingsTabMonth" aria-selected="true" aria-controls="savingsMonthPanel" tabindex="0" data-savings-tab="month">This month</button>
+          <button class="segmented__item" type="button" role="tab" id="savingsTabTotal" aria-selected="false" aria-controls="savingsTotalPanel" tabindex="-1" data-savings-tab="total">Total</button>
+        </div>
+
+        <section id="savingsMonthPanel" role="tabpanel" aria-labelledby="savingsTabMonth">
+          <div class="savings-hero">
+            <p class="savings-hero__label">Saved in <span id="savingsMonthLabel">November 2026</span></p>
+            <p class="savings-hero__amount" id="savingsMonthTotal">₹0.00</p>
+            <p class="savings-hero__meta" id="savingsMonthMeta">No entries yet</p>
+            <div class="savings-hero__actions">
+              <button class="button button--primary" type="button" id="addSavingButton">
+                <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+                Add savings
+              </button>
+            </div>
+          </div>
+
+          <section class="section section--tight" aria-labelledby="savingsMonthEntriesTitle">
+            <div class="section__head">
+              <h2 class="section__title" id="savingsMonthEntriesTitle">This month’s entries</h2>
+              <span class="section__hint" id="savingsMonthCount"></span>
+            </div>
+            <div id="savingsMonthList"></div>
+          </section>
+        </section>
+
+        <section id="savingsTotalPanel" role="tabpanel" aria-labelledby="savingsTabTotal" hidden>
+          <div class="savings-hero savings-hero--total">
+            <p class="savings-hero__label">Total accumulated savings</p>
+            <p class="savings-hero__amount" id="savingsTotalAmount">₹0.00</p>
+            <p class="savings-hero__meta" id="savingsMonthsCount">Across 0 months</p>
+            <div class="savings-growth" id="savingsGrowthCard">
+              <span class="savings-growth__icon" aria-hidden="true"><svg class="icon"><use href="#i-trend"></use></svg></span>
+              <span class="savings-growth__value" id="savingsGrowth">+₹0.00</span>
+              <span class="savings-growth__text" id="savingsGrowthMeta">compared with last month</span>
+            </div>
+            <div class="savings-hero__actions">
+              <button class="button button--quiet" type="button" id="addSavingTotalButton">
+                <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+                Add savings
+              </button>
+            </div>
+          </div>
+
+          <section class="section section--tight" aria-labelledby="savingsDetailTitle">
+            <div class="section__head">
+              <h2 class="section__title" id="savingsDetailTitle">Month by month</h2>
+              <div class="month-stepper month-stepper--small" role="group" aria-label="Choose a savings month">
+                <button class="month-stepper__button is-prev" type="button" id="savingsPrevMonth" aria-label="Previous month">
+                  <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+                </button>
+                <span class="month-stepper__label" id="savingsTotalMonthLabel" aria-live="polite">November 2026</span>
+                <button class="month-stepper__button" type="button" id="savingsNextMonth" aria-label="Next month">
+                  <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="panel savings-month" aria-live="polite">
+              <div class="savings-month__head">
+                <span class="savings-month__label">Saved that month</span>
+                <strong class="savings-month__amount" id="savingsTotalMonthAmount">₹0.00</strong>
+              </div>
+              <p class="savings-month__meta" id="savingsTotalMonthMeta">No entries in this month</p>
+              <div id="savingsTotalMonthList"></div>
+            </div>
+          </section>
+
+          <section class="section section--tight" aria-labelledby="savingsAllMonthsTitle">
+            <div class="section__head">
+              <h2 class="section__title" id="savingsAllMonthsTitle">All months</h2>
+              <span class="section__hint" id="savingsAllMonthsCount"></span>
+            </div>
+            <div id="savingsMonthGroups"></div>
+          </section>
+        </section>
+
+        <p class="footnote">
+          Savings have their own records. They are never added to your expense history and never counted in expense analytics — only in the monthly remaining balance.
         </p>
       </section>
     </main>
 
     <nav class="dock" id="dock" aria-label="Primary">
-      <button class="dock__tab is-active" type="button" data-view="home" aria-current="page">
+      <button class="dock__tab is-active" type="button" data-view="dashboard" aria-current="page">
         <svg class="icon" aria-hidden="true"><use href="#i-home"></use></svg>
-        <span>Home</span>
+        <span>Dashboard</span>
+      </button>
+      <button class="dock__tab" type="button" data-view="expenses">
+        <svg class="icon" aria-hidden="true"><use href="#i-history"></use></svg>
+        <span>Expenses</span>
       </button>
       <button class="dock__add" type="button" id="addExpenseButton" aria-label="Add expense">
         <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
       </button>
-      <button class="dock__tab" type="button" data-view="history">
-        <svg class="icon" aria-hidden="true"><use href="#i-history"></use></svg>
-        <span>History</span>
+      <button class="dock__tab" type="button" data-view="salary">
+        <svg class="icon" aria-hidden="true"><use href="#i-rupee"></use></svg>
+        <span>Salary</span>
+      </button>
+      <button class="dock__tab" type="button" data-view="savings">
+        <svg class="icon" aria-hidden="true"><use href="#i-savings"></use></svg>
+        <span>Savings</span>
       </button>
     </nav>
   </div>
 
+  <!-- ==================================================================== -->
+  <!-- Expense sheet                                                        -->
+  <!-- ==================================================================== -->
   <dialog class="sheet" id="expenseSheet" aria-labelledby="expenseSheetTitle" aria-describedby="expenseSheetSub">
     <div class="sheet__grip" aria-hidden="true"></div>
     <header class="sheet__head">
@@ -365,6 +613,136 @@
           <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
           Stored in this browser only. Nothing is uploaded.
         </p>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- ==================================================================== -->
+  <!-- Salary sheet                                                         -->
+  <!-- ==================================================================== -->
+  <dialog class="sheet" id="salarySheet" aria-labelledby="salarySheetTitle" aria-describedby="salarySheetSub">
+    <div class="sheet__grip" aria-hidden="true"></div>
+    <header class="sheet__head">
+      <button class="icon-button" type="button" id="closeSalarySheet" aria-label="Close">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+      </button>
+      <div class="sheet__titles">
+        <h2 class="sheet__title" id="salarySheetTitle">Add salary</h2>
+        <p class="sheet__sub" id="salarySheetSub">One record per month</p>
+      </div>
+      <span class="sheet__spacer" aria-hidden="true"></span>
+    </header>
+    <div class="sheet__body">
+      <form id="salaryForm" novalidate>
+        <p class="form-error" id="salaryFormError" role="alert" hidden></p>
+
+        <div class="field">
+          <label for="salaryAmountInput">Salary amount</label>
+          <div class="money-input">
+            <span class="money-input__currency" aria-hidden="true">₹</span>
+            <input id="salaryAmountInput" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-describedby="salaryAmountError" required>
+          </div>
+          <p class="field__error" id="salaryAmountError" hidden></p>
+        </div>
+
+        <div class="field">
+          <label for="salaryMonthSelect">Month</label>
+          <div class="month-select">
+            <select id="salaryMonthSelect" name="month" aria-label="Month" aria-describedby="salaryMonthError"></select>
+            <select id="salaryYearSelect" name="year" aria-label="Year" aria-describedby="salaryMonthError"></select>
+          </div>
+          <p class="field__error" id="salaryMonthError" hidden></p>
+        </div>
+
+        <div class="field">
+          <label for="salaryNotesInput">Notes <span class="field__optional">optional</span></label>
+          <textarea id="salaryNotesInput" name="notes" rows="2" maxlength="200" placeholder="Bonus, appraisal, freelance…" aria-describedby="salaryNotesError"></textarea>
+          <p class="field__error" id="salaryNotesError" hidden></p>
+        </div>
+
+        <button class="button button--primary button--block" type="submit" id="saveSalaryButton">Save salary</button>
+        <p class="form-note">
+          <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
+          Saved on this device. Works offline.
+        </p>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- ==================================================================== -->
+  <!-- Savings sheet                                                        -->
+  <!-- ==================================================================== -->
+  <dialog class="sheet" id="savingSheet" aria-labelledby="savingSheetTitle" aria-describedby="savingSheetSub">
+    <div class="sheet__grip" aria-hidden="true"></div>
+    <header class="sheet__head">
+      <button class="icon-button" type="button" id="closeSavingSheet" aria-label="Close">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+      </button>
+      <div class="sheet__titles">
+        <h2 class="sheet__title" id="savingSheetTitle">Add savings</h2>
+        <p class="sheet__sub" id="savingSheetSub">Kept separate from expenses</p>
+      </div>
+      <span class="sheet__spacer" aria-hidden="true"></span>
+    </header>
+    <div class="sheet__body">
+      <form id="savingForm" novalidate>
+        <p class="form-error" id="savingFormError" role="alert" hidden></p>
+
+        <div class="field">
+          <label for="savingAmountInput">Amount</label>
+          <div class="money-input">
+            <span class="money-input__currency" aria-hidden="true">₹</span>
+            <input id="savingAmountInput" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-describedby="savingAmountError" required>
+          </div>
+          <p class="field__error" id="savingAmountError" hidden></p>
+        </div>
+
+        <div class="field">
+          <label for="savingDateInput">Date</label>
+          <input id="savingDateInput" name="date" type="date" required aria-describedby="savingDateError">
+          <p class="field__error" id="savingDateError" hidden></p>
+        </div>
+
+        <div class="field">
+          <label for="savingDescriptionInput">Description <span class="field__optional">optional</span></label>
+          <input id="savingDescriptionInput" name="description" type="text" maxlength="100" autocomplete="off" placeholder="Emergency fund, gold, SIP…" aria-describedby="savingDescriptionError">
+          <p class="field__error" id="savingDescriptionError" hidden></p>
+        </div>
+
+        <button class="button button--primary button--block" type="submit" id="saveSavingButton">Save savings</button>
+        <p class="form-note">
+          <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
+          Savings are not expenses. Nothing is uploaded.
+        </p>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- ==================================================================== -->
+  <!-- Month picker sheet                                                   -->
+  <!-- ==================================================================== -->
+  <dialog class="sheet sheet--compact" id="monthPickerSheet" aria-labelledby="monthPickerTitle" aria-describedby="monthPickerSub">
+    <div class="sheet__grip" aria-hidden="true"></div>
+    <header class="sheet__head">
+      <button class="icon-button" type="button" id="closeMonthPicker" aria-label="Close">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+      </button>
+      <div class="sheet__titles">
+        <h2 class="sheet__title" id="monthPickerTitle">Jump to month</h2>
+        <p class="sheet__sub" id="monthPickerSub">Review any month’s salary and balance</p>
+      </div>
+      <span class="sheet__spacer" aria-hidden="true"></span>
+    </header>
+    <div class="sheet__body">
+      <form id="monthPickerForm" novalidate>
+        <div class="field">
+          <label for="pickerMonthSelect">Month</label>
+          <div class="month-select">
+            <select id="pickerMonthSelect" name="month" aria-label="Month"></select>
+            <select id="pickerYearSelect" name="year" aria-label="Year"></select>
+          </div>
+        </div>
+        <button class="button button--primary button--block" type="submit" id="pickerGoButton">Go to month</button>
       </form>
     </div>
   </dialog>

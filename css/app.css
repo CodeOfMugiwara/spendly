@@ -595,12 +595,12 @@ svg {
   margin-top: 26px;
 }
 
-#view-home.is-empty #glanceSection,
-#view-home.is-empty .week {
+#view-dashboard.is-empty #glanceSection,
+#view-dashboard.is-empty .week {
   display: none;
 }
 
-#view-home.is-empty .section {
+#view-dashboard.is-empty .section {
   margin-top: 22px;
 }
 
@@ -932,6 +932,7 @@ svg {
   gap: 3px;
   min-width: 0;
   flex: 1;
+  overflow: hidden;
 }
 
 .entry__title {
@@ -1417,11 +1418,11 @@ svg {
   left: 50%;
   bottom: calc(10px + env(safe-area-inset-bottom));
   z-index: 60;
-  width: min(360px, calc(100vw - 32px));
+  width: min(412px, calc(100vw - 26px));
   display: grid;
-  grid-template-columns: 1fr 72px 1fr;
+  grid-template-columns: 1fr 1fr 64px 1fr 1fr;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   padding: 7px;
   transform: translateX(-50%);
   border-radius: 26px;
@@ -1441,15 +1442,24 @@ svg {
   align-items: center;
   justify-content: center;
   gap: 3px;
+  min-width: 0;
   height: 48px;
+  padding: 0 2px;
   border: 0;
-  border-radius: 18px;
+  border-radius: 16px;
   background: none;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.005em;
   transition: color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.dock__tab span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dock__tab .icon {
@@ -1468,8 +1478,8 @@ svg {
 }
 
 .dock__add {
-  width: 58px;
-  height: 58px;
+  width: 56px;
+  height: 56px;
   margin-top: -20px;
   justify-self: center;
   display: grid;
@@ -1779,6 +1789,11 @@ svg {
   width: 100%;
 }
 
+/* Author display rules must not defeat the hidden attribute. */
+.button[hidden] {
+  display: none;
+}
+
 .form-error {
   margin-bottom: 14px;
   padding: 10px 12px;
@@ -1957,6 +1972,774 @@ svg {
 }
 
 /* --------------------------------------------------------------------------
+   Monthly finance overview (dashboard)
+   -------------------------------------------------------------------------- */
+
+.month-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  flex: none;
+}
+
+.month-stepper__button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--forest);
+  transition: background 0.16s ease, transform 0.16s ease;
+}
+
+.month-stepper__button .icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.2;
+}
+
+.month-stepper__button.is-prev .icon {
+  transform: rotate(180deg);
+}
+
+.month-stepper__button:active {
+  transform: scale(0.92);
+}
+
+.month-stepper__label {
+  min-width: 84px;
+  max-width: 104px;
+  padding: 0 3px;
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--ink-soft);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.month-stepper--small .month-stepper__label {
+  min-width: 74px;
+  font-size: 10px;
+}
+
+.finance {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.finance__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.finance__cell {
+  min-width: 0;
+  padding: 13px 10px 12px 14px;
+}
+
+.finance__cell + .finance__cell {
+  border-left: 1px solid var(--line);
+}
+
+.finance__label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.085em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.finance__value {
+  display: block;
+  overflow-wrap: anywhere;
+  font-family: var(--font-display);
+  font-size: clamp(12px, 3.5vw, 15px);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.finance__value.is-unset {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: clamp(11px, 3.2vw, 13px);
+}
+
+.finance__balance {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 13px 14px 14px;
+  border-top: 1px solid var(--line);
+  background: linear-gradient(160deg, #f5fbf7, #edf6ef);
+}
+
+.finance__balance-text {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.finance__balance-label {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--ink-soft);
+}
+
+.finance__balance-value {
+  overflow-wrap: anywhere;
+  font-family: var(--font-display);
+  font-size: clamp(21px, 6vw, 27px);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--forest);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.finance__note {
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.finance__balance.is-negative {
+  background: linear-gradient(160deg, #fdf5f3, #fbebe8);
+}
+
+.finance__balance.is-negative .finance__balance-value {
+  color: var(--danger);
+}
+
+.finance__balance.is-unconfigured {
+  background: var(--surface-soft);
+}
+
+.finance__balance.is-unconfigured .finance__balance-value {
+  color: var(--muted);
+}
+
+.shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.shortcut {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  text-align: left;
+  transition: transform 0.16s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.shortcut:active {
+  transform: scale(0.985);
+}
+
+.shortcut__icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--mint);
+  color: var(--forest);
+  flex: none;
+}
+
+.shortcut__icon--soft {
+  background: #eaf2f9;
+  color: #2c5a80;
+}
+
+.shortcut__icon .icon {
+  width: 17px;
+  height: 17px;
+}
+
+.shortcut__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.shortcut__text strong {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: -0.012em;
+}
+
+.shortcut__text small {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.shortcut__chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+  flex: none;
+}
+
+/* --------------------------------------------------------------------------
+   Salary page
+   -------------------------------------------------------------------------- */
+
+.income-card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  margin-top: 4px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: var(--radius-xl);
+  color: #fff;
+  background:
+    radial-gradient(130% 100% at 100% 0%, rgba(134, 226, 167, 0.2), transparent 58%),
+    radial-gradient(90% 80% at 0% 0%, rgba(255, 255, 255, 0.08), transparent 48%),
+    linear-gradient(155deg, #0a3521 0%, #14522f 55%, #1d6c42 100%);
+  box-shadow: var(--shadow-hero);
+}
+
+.income-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.income-card__titles {
+  min-width: 0;
+  text-align: center;
+}
+
+.income-card__label {
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.income-card__hint {
+  margin-top: 1px;
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.income-card .month-stepper__button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.11);
+  color: #fff;
+  flex: none;
+}
+
+.income-card__amount {
+  margin: 18px 0 4px;
+  overflow-wrap: anywhere;
+  font-family: var(--font-display);
+  font-size: clamp(34px, 10.4vw, 46px);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.income-card__amount.is-unset {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: clamp(21px, 6.4vw, 27px);
+  letter-spacing: -0.025em;
+}
+
+.income-card__notes {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  font-size: 11.5px;
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.74);
+}
+
+.income-card__notes[hidden] {
+  display: none;
+}
+
+.income-card__status {
+  margin-top: 7px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.income-card__split {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 15px;
+  overflow: hidden;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.split__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.split__item span {
+  font-size: 8.5px;
+  font-weight: 650;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.split__item strong {
+  overflow-wrap: anywhere;
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.split__item--end {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.split__item.is-negative strong {
+  color: #ffc9c2;
+}
+
+.income-card__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 15px;
+}
+
+.income-card__actions .button {
+  min-height: 46px;
+  font-size: 13.5px;
+}
+
+.income-card .button--primary {
+  background: #fff;
+  color: var(--forest-deep);
+  box-shadow: 0 9px 20px -12px rgba(0, 0, 0, 0.55);
+}
+
+.income-card .button--quiet {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.entry__avatar--income {
+  background: var(--mint);
+  color: var(--forest);
+}
+
+.entry__avatar--saving {
+  background: #eaf2f9;
+  color: #2c5a80;
+}
+
+.entry__avatar--income .icon,
+.entry__avatar--saving .icon {
+  width: 17px;
+  height: 17px;
+}
+
+.entry__amount--saving {
+  color: var(--forest);
+}
+
+/* --------------------------------------------------------------------------
+   Savings page
+   -------------------------------------------------------------------------- */
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin-top: 2px;
+  padding: 4px;
+  border: 1px solid rgba(20, 50, 30, 0.05);
+  border-radius: 15px;
+  background: rgba(20, 50, 30, 0.055);
+}
+
+.segmented__item {
+  min-height: 40px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.segmented__item.is-active {
+  background: var(--surface);
+  color: var(--forest);
+  box-shadow: 0 2px 8px -5px rgba(15, 35, 22, 0.4), inset 0 0 0 1px rgba(20, 50, 30, 0.05);
+}
+
+.savings-hero {
+  margin-top: 14px;
+  padding: 17px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.savings-hero__label {
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.savings-hero__amount {
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  font-family: var(--font-display);
+  font-size: clamp(32px, 9.8vw, 44px);
+  font-weight: 700;
+  letter-spacing: -0.048em;
+  line-height: 1.02;
+  color: var(--forest-deep);
+  font-variant-numeric: tabular-nums;
+}
+
+.savings-hero__meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.savings-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.savings-hero__actions .button {
+  min-height: 44px;
+  padding: 0 15px;
+  border-radius: 13px;
+  font-size: 13px;
+}
+
+.savings-hero__actions .icon {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.2;
+}
+
+.savings-hero--total {
+  border-color: rgba(23, 107, 58, 0.14);
+  background:
+    radial-gradient(120% 110% at 100% 0%, rgba(134, 226, 167, 0.18), transparent 58%),
+    linear-gradient(160deg, #f5fcf8, #e9f5ee);
+}
+
+.savings-hero--total .savings-hero__amount {
+  color: var(--forest);
+}
+
+.savings-growth {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.savings-growth__icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--mint);
+  color: var(--forest);
+  flex: none;
+}
+
+.savings-growth__icon .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.savings-growth__value {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.savings-growth__value.is-up {
+  color: var(--forest);
+}
+
+.savings-growth__value.is-down {
+  color: var(--danger);
+}
+
+.savings-growth__text {
+  min-width: 0;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.savings-month {
+  padding: 15px;
+}
+
+.savings-month__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.savings-month__label {
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.085em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.savings-month__amount {
+  overflow-wrap: anywhere;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+}
+
+.savings-month__meta {
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.savings-month__empty {
+  margin-top: 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+#savingsTotalMonthList .list-card {
+  margin-top: 11px;
+}
+
+.month-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  transition: background 0.16s ease;
+}
+
+.month-row + .month-row {
+  border-top: 1px solid var(--line);
+}
+
+.month-row__icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--forest);
+  flex: none;
+}
+
+.month-row__icon .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.month-row__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.month-row__text strong {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.month-row__text small {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.month-row__amount {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.month-row > .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+  flex: none;
+}
+
+.month-row[aria-pressed="true"] {
+  background: linear-gradient(90deg, rgba(23, 107, 58, 0.06), rgba(23, 107, 58, 0.015));
+}
+
+/* --------------------------------------------------------------------------
+   Extra form controls
+   -------------------------------------------------------------------------- */
+
+.month-select {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr);
+  gap: 8px;
+}
+
+.month-select select {
+  width: 100%;
+  height: 50px;
+  padding: 0 34px 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  outline: none;
+  background-color: var(--surface-soft);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%235f7167' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 14px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+
+.month-select select:focus {
+  background-color: #fff;
+  border-color: rgba(23, 107, 58, 0.38);
+  box-shadow: 0 0 0 4px rgba(47, 138, 85, 0.1);
+}
+
+.month-select select[aria-invalid="true"] {
+  border-color: rgba(180, 35, 24, 0.5);
+  background-color: #fffbfa;
+}
+
+.field > textarea {
+  width: 100%;
+  min-height: 64px;
+  padding: 13px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  outline: none;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.45;
+  resize: vertical;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.field > textarea:focus {
+  background: #fff;
+  border-color: rgba(23, 107, 58, 0.38);
+  box-shadow: 0 0 0 4px rgba(47, 138, 85, 0.1);
+}
+
+.field > textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.field > textarea[aria-invalid="true"] {
+  border-color: rgba(180, 35, 24, 0.5);
+  background: #fffbfa;
+}
+
+.field__optional {
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------------------
    Motion
    -------------------------------------------------------------------------- */
 
@@ -2058,7 +2841,39 @@ svg {
 
   .dock {
     bottom: 24px;
-    width: 348px;
+    width: 396px;
+  }
+
+  .finance__cell {
+    padding: 15px 16px;
+  }
+
+  .finance__balance {
+    padding: 15px 16px 16px;
+  }
+
+  .finance__balance-value {
+    font-size: 29px;
+  }
+
+  .income-card {
+    padding: 22px;
+  }
+
+  .income-card__amount {
+    margin: 20px 0 5px;
+  }
+
+  .savings-hero {
+    padding: 20px;
+  }
+
+  .savings-hero__amount {
+    font-size: 46px;
+  }
+
+  .shortcuts {
+    gap: 12px;
   }
 
   .sheet {
@@ -2133,6 +2948,54 @@ svg {
 
   .dock {
     width: calc(100vw - 22px);
+    gap: 0;
+  }
+
+  .dock__tab {
+    font-size: 8.25px;
+  }
+
+  .dock__add {
+    width: 50px;
+    height: 50px;
+  }
+
+  .month-stepper__button {
+    width: 25px;
+    height: 25px;
+  }
+
+  .month-stepper__label {
+    min-width: 0;
+    max-width: 78px;
+    font-size: 9.5px;
+  }
+
+  .month-stepper--small .month-stepper__label {
+    min-width: 0;
+    max-width: 70px;
+  }
+
+  .section__head {
+    gap: 8px;
+  }
+
+  .shortcut {
+    gap: 7px;
+    padding: 8px;
+  }
+
+  .shortcut__icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .split__item {
+    padding: 8px 7px;
+  }
+
+  .split__item strong {
+    font-size: 11.5px;
   }
 
   .entry__main {
@@ -2202,6 +3065,27 @@ svg {
   .action__item:hover {
     border-color: rgba(23, 107, 58, 0.16);
   }
+
+  .shortcut:hover {
+    border-color: rgba(23, 107, 58, 0.18);
+    box-shadow: 0 2px 4px rgba(15, 35, 22, 0.04), 0 14px 30px -22px rgba(15, 35, 22, 0.4);
+  }
+
+  .month-row:hover {
+    background: var(--surface-soft);
+  }
+
+  .month-stepper__button:hover {
+    background: rgba(23, 107, 58, 0.08);
+  }
+
+  .income-card .month-stepper__button:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .segmented__item:not(.is-active):hover {
+    color: var(--forest);
+  }
 }
 
 /* Opaque, still attractive fallbacks when backdrop-filter is unsupported. */
@@ -2270,4 +3154,133 @@ svg {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
+}
+
+/* --------------------------------------------------------------------------
+   Salary month navigator
+   -------------------------------------------------------------------------- */
+
+.income-card__titles--button {
+  flex: 1;
+  padding: 6px 10px 7px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.income-card__titles--button:hover,
+.income-card__titles--button:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.income-card__titles--button:active {
+  transform: scale(0.985);
+}
+
+.income-card__titles--button .income-card__label,
+.income-card__titles--button .income-card__hint {
+  display: block;
+}
+
+.income-card__now {
+  display: flex;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.income-card__now[hidden] {
+  display: none;
+}
+
+.income-card .chip-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+
+.income-card .chip-button .icon {
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.9;
+}
+
+.income-card .chip-button:hover,
+.income-card .chip-button:focus-visible {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.income-card .chip-button:active {
+  transform: scale(0.96);
+}
+
+.income-card__amount.is-shifting-left {
+  animation: amount-in-left 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.income-card__amount.is-shifting-right {
+  animation: amount-in-right 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes amount-in-left {
+  from { opacity: 0.25; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes amount-in-right {
+  from { opacity: 0.25; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.sheet--compact {
+  max-width: 460px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .income-card__amount.is-shifting-left,
+  .income-card__amount.is-shifting-right {
+    animation: none;
+  }
+}
+
+.income-card__label-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.income-card__label-row .income-card__label {
+  min-width: 0;
+}
+
+.income-card__caret {
+  width: 12px;
+  height: 12px;
+  margin-top: 1px;
+  opacity: 0.68;
+  stroke-width: 2.2;
+  flex: none;
+}
+
+.income-card__titles--button:hover .income-card__caret,
+.income-card__titles--button:focus-visible .income-card__caret {
+  opacity: 1;
 }

@@ -1,55 +1,116 @@
 /**
  * Spendly UI.
  *
- * All persistence goes through ExpenseRepository; this file never touches
- * IndexedDB directly. That keeps the interface replaceable and leaves a clean
- * seam for a future remote adapter.
+ * All persistence goes through the repositories; this file never touches
+ * IndexedDB directly. Four views share one render loop:
+ *
+ *   dashboard  expense analytics + the monthly salary/expense/savings balance
+ *   expenses   the searchable expense ledger
+ *   salary     one manual salary record per calendar month
+ *   savings    this month's entries and the accumulated total
  */
 
 import {
   PERIODS,
   addDays,
-  expenseWord,
+  computeMonthlyFinance,
+  currentMonthKey,
+  findSalaryForMonth,
   formatDate,
   formatMoney,
   formatMoneyParts,
   formatMonth,
+  formatMonthKey,
+  fromPaise,
   groupExpensesByMonth,
+  groupSavingsByMonth,
+  isMonthKey,
   localToday,
   matchesQuery,
+  monthBounds,
   normalizeExpenseRecord,
+  normalizeSalaryRecord,
+  normalizeSavingRecord,
   normalizeQuery,
   relativeDayLabel,
+  savingsForMonth,
+  shiftMonth,
+  shortMonthLabel,
   sortExpenses,
+  sumSavings,
   summarize,
   toISODate,
+  toPaise,
+  sumSavingsPaise,
   validateExpenseInput
 } from './core.js';
-import { openExpenseDB, IndexedDBExpenseStore } from './db.js';
-import { ExpenseRepository, NotFoundError, ValidationError } from './repository.js';
+import {
+  IndexedDBExpenseStore,
+  IndexedDBSalaryStore,
+  IndexedDBSavingsStore,
+  openSpendlyDB
+} from './db.js';
+import {
+  DuplicateMonthError,
+  ExpenseRepository,
+  NotFoundError,
+  SalaryRepository,
+  SavingsRepository,
+  ValidationError
+} from './repository.js';
 
 const $ = id => document.getElementById(id);
 const ICON = name => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
 const INSTALL_DISMISSED_KEY = 'spendly_install_tip_dismissed_v1';
 const AVATAR_TINTS = ['#e8f3ec', '#f1f0e2', '#e8eef3', '#f4ebe5', '#edf2e6'];
-const FIELD_INPUTS = {
+const VIEWS = ['dashboard', 'expenses', 'salary', 'savings'];
+const VIEW_TITLES = {
+  dashboard: 'Spendly — Salary, Spending & Savings',
+  expenses: 'Expenses — Spendly',
+  salary: 'Salary — Spendly',
+  savings: 'Savings — Spendly'
+};
+const EXPENSE_FIELDS = {
   amount: 'amountInput',
   description: 'descriptionInput',
   date: 'dateInput'
 };
+const SALARY_FIELDS = {
+  amount: ['salaryAmountInput', 'salaryAmountError'],
+  monthKey: ['salaryMonthSelect', 'salaryMonthError'],
+  notes: ['salaryNotesInput', 'salaryNotesError']
+};
+const SAVING_FIELDS = {
+  amount: ['savingAmountInput', 'savingAmountError'],
+  date: ['savingDateInput', 'savingDateError'],
+  description: ['savingDescriptionInput', 'savingDescriptionError']
+};
+const MONTH_NAMES = Array.from({ length: 12 }, (_, index) =>
+  new Intl.DateTimeFormat('en-IN', { month: 'long' }).format(new Date(2026, index, 1)));
 
 let offlineReady = Boolean(navigator.serviceWorker?.controller);
 
 const state = {
   repo: null,
+  salaryRepo: null,
+  savingsRepo: null,
   expenses: [],
+  salaries: [],
+  savings: [],
   selectedPeriod: 'month',
-  view: 'home',
+  view: 'dashboard',
   search: '',
-  editingId: null,
+  editingExpenseId: null,
+  editingSalaryId: null,
+  editingSavingId: null,
+  financeMonth: currentMonthKey(),
+  salaryMonth: currentMonthKey(),
+  savingsMonth: currentMonthKey(),
+  savingsTab: 'month',
   ready: false,
-  saving: false,
-  savingEdit: false,
+  savingExpense: false,
+  savingSalary: false,
+  savingEntry: false,
   toastTimer: null,
   searchTimer: null,
   installPrompt: null,
@@ -81,14 +142,16 @@ const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion:
 bindEvents();
 updateConnectionUI();
 setupDialogs();
+populateMonthOptions();
 setupServiceWorker();
 void initData();
 
 async function initData() {
   try {
-    const database = await openExpenseDB();
-    const store = new IndexedDBExpenseStore(database);
-    state.repo = new ExpenseRepository(store);
+    const database = await openSpendlyDB();
+    state.repo = new ExpenseRepository(new IndexedDBExpenseStore(database));
+    state.salaryRepo = new SalaryRepository(new IndexedDBSalaryStore(database));
+    state.savingsRepo = new SavingsRepository(new IndexedDBSavingsStore(database));
 
     let migration;
     try {
@@ -98,11 +161,11 @@ async function initData() {
       migration = { status: 'failed', imported: 0 };
     }
 
-    state.expenses = await state.repo.list();
+    await refreshAll();
     state.ready = true;
     document.documentElement.dataset.appReady = 'true';
     render();
-    showView('home');
+    showView('dashboard');
     applyLaunchParams();
 
     if (migration.status === 'migrated' && migration.imported > 0) {
@@ -124,14 +187,14 @@ async function initData() {
 function showFatal(error) {
   state.ready = false;
   $('fatalError').hidden = false;
-  $('view-home').hidden = true;
-  $('view-history').hidden = true;
+  for (const view of VIEWS) $(`view-${view}`).hidden = true;
   $('addExpenseButton').disabled = true;
+  $('dock').querySelectorAll('.dock__tab').forEach(tab => { tab.disabled = true; });
 
   const blocked = /another tab/i.test(error?.message ?? '');
   $('fatalMessage').textContent = blocked
     ? 'Spendly’s local database is open in another tab. Close the other Spendly tabs, then reload this page.'
-    : 'Your expenses have not been deleted. Reload the page to try again, and check that Safari or your browser allows site data.';
+    : 'Your data has not been deleted. Reload the page to try again, and check that Safari or your browser allows site data.';
 }
 
 async function requestPersistentStorage() {
@@ -144,19 +207,38 @@ async function requestPersistentStorage() {
   }
 }
 
+async function refreshAll() {
+  if (!state.repo) return;
+  const [expenses, salaries, savings] = await Promise.all([
+    state.repo.list(),
+    state.salaryRepo.list(),
+    state.savingsRepo.list()
+  ]);
+  state.expenses = expenses;
+  state.salaries = salaries;
+  state.savings = savings;
+}
+
+function hasAnyData() {
+  return state.expenses.length > 0 || state.salaries.length > 0 || state.savings.length > 0;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Rendering                                                                  */
 /* -------------------------------------------------------------------------- */
 
 function render() {
   if (!state.ready) return;
-  $('view-home').classList.toggle('is-empty', state.expenses.length === 0);
   const summary = summarize(state.expenses, new Date());
+  $('view-dashboard').classList.toggle('is-empty', state.expenses.length === 0);
   renderHero(summary);
+  renderFinance();
   renderGlance(summary);
   renderWeek(summary.week);
   renderRecent(summary.recent);
-  renderHistory(summary);
+  renderExpensesPage(summary);
+  renderSalaryPage();
+  renderSavingsPage();
   renderInstallPrompt();
 }
 
@@ -174,6 +256,69 @@ function renderHero(summary) {
   $('heroAverage').textContent = formatMoney(period.dailyAverage);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Dashboard: monthly financial overview                                      */
+/* -------------------------------------------------------------------------- */
+
+function financeMonthStatus(monthKey) {
+  const current = currentMonthKey();
+  if (monthKey === current) return 'Current month';
+  return monthKey < current ? 'Past month' : 'Future month';
+}
+
+function financeFor(monthKey) {
+  return computeMonthlyFinance(monthKey, {
+    salary: findSalaryForMonth(state.salaries, monthKey),
+    expenses: state.expenses,
+    savings: state.savings
+  });
+}
+
+function renderFinance() {
+  const key = state.financeMonth;
+  const finance = financeFor(key);
+
+  $('financeMonthLabel').textContent = formatMonthKey(key);
+  $('financeMonthLabel').setAttribute('title', formatMonthKey(key));
+  $('financeSalary').textContent = finance.hasSalary ? formatMoney(finance.salaryTotal) : 'Not set';
+  $('financeSalary').classList.toggle('is-unset', !finance.hasSalary);
+  $('financeExpenses').textContent = formatMoney(finance.expenseTotal);
+  $('financeSavings').textContent = formatMoney(finance.savingsTotal);
+
+  const balance = $('financeBalance');
+  balance.classList.toggle('is-negative', finance.isNegative);
+  balance.classList.toggle('is-unconfigured', !finance.hasSalary);
+
+  if (!finance.hasSalary) {
+    $('financeRemainingValue').textContent = '—';
+    $('financeRemainingNote').textContent = `No salary recorded for ${formatMonthKey(key)}. Add one to see what is left.`;
+    $('financeRemainingValue').setAttribute('aria-label', 'Remaining balance unavailable — no salary recorded');
+  } else {
+    $('financeRemainingValue').textContent = formatMoney(finance.remaining);
+    $('financeRemainingValue').setAttribute('aria-label', `Remaining balance ${formatMoney(finance.remaining)}`);
+    $('financeRemainingNote').textContent = finance.isNegative
+      ? `Expenses and savings are ${formatMoney(Math.abs(finance.remaining))} more than this month’s salary.`
+      : 'Salary minus this month’s expenses and savings.';
+  }
+
+  $('financeCard').setAttribute(
+    'aria-label',
+    finance.hasSalary
+      ? `${formatMonthKey(key)}: salary ${formatMoney(finance.salaryTotal)}, expenses ${formatMoney(finance.expenseTotal)}, savings ${formatMoney(finance.savingsTotal)}, remaining ${formatMoney(finance.remaining)}.`
+      : `${formatMonthKey(key)}: no salary recorded. Expenses ${formatMoney(finance.expenseTotal)}, savings ${formatMoney(finance.savingsTotal)}.`
+  );
+
+  const shortLabel = shortMonthLabel(key, { withYear: true });
+  $('shortcutSalary').textContent = finance.hasSalary
+    ? `${formatMoney(finance.salaryTotal)} recorded`
+    : `Not set for ${shortLabel}`;
+  $('shortcutSavings').textContent = `${formatMoney(finance.savingsTotal)} saved`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Dashboard: expense analytics                                               */
+/* -------------------------------------------------------------------------- */
+
 function renderGlance(summary) {
   for (const period of PERIODS) {
     const tile = document.querySelector(`[data-period="${period}"]`);
@@ -187,7 +332,7 @@ function renderGlance(summary) {
   $('allTimeCount').textContent = String(summary.all.count);
   $('allTimeButton').setAttribute(
     'aria-label',
-    `All time: ${formatMoney(summary.all.total)} across ${expenseWord(summary.all.count)}. Open history.`
+    `All time: ${formatMoney(summary.all.total)} across ${expenseWord(summary.all.count)}. Open expenses.`
   );
 }
 
@@ -224,7 +369,11 @@ function renderRecent(recent) {
       });
 }
 
-function renderHistory(summary) {
+/* -------------------------------------------------------------------------- */
+/* Expenses page                                                              */
+/* -------------------------------------------------------------------------- */
+
+function renderExpensesPage(summary) {
   const query = normalizeQuery(state.search);
   const matching = query
     ? state.expenses.filter(expense => matchesQuery(expense, query))
@@ -318,15 +467,223 @@ function avatarTint(seed) {
   return AVATAR_TINTS[hash % AVATAR_TINTS.length];
 }
 
+function expenseWord(count) {
+  return `${count} ${count === 1 ? 'expense' : 'expenses'}`;
+}
+
+function savingWord(count) {
+  return `${count} ${count === 1 ? 'entry' : 'entries'}`;
+}
+
 /* -------------------------------------------------------------------------- */
-/* Views and periods                                                          */
+/* Salary page                                                                */
+/* -------------------------------------------------------------------------- */
+
+function renderSalaryPage() {
+  const key = state.salaryMonth;
+  const record = findSalaryForMonth(state.salaries, key);
+  const finance = financeFor(key);
+  const label = formatMonthKey(key);
+
+  $('salaryMonthLabel').textContent = label;
+  $('salaryMonthHint').textContent = financeMonthStatus(key);
+  $('salaryMonthPickerButton').setAttribute('aria-label', `Selected month: ${label}. Choose another month and year.`);
+  $('salaryNowRow').hidden = key === currentMonthKey();
+
+  $('salaryAmount').innerHTML = record ? amountMarkup(record.amount) : 'Not configured';
+  $('salaryAmount').classList.toggle('is-unset', !record);
+  $('salaryAmount').setAttribute('aria-label', record ? formatMoney(record.amount) : 'Salary not configured');
+
+  $('salaryNotes').hidden = !record?.notes;
+  $('salaryNotes').textContent = record?.notes ? `“${record.notes}”` : '';
+
+  $('salaryStatus').textContent = record
+    ? `Monthly salary recorded for ${label}.`
+    : `No salary recorded for ${label}. Add one to calculate the remaining balance.`;
+
+  $('salarySplit').innerHTML = `
+    <div class="split__item">
+      <span>Expenses</span>
+      <strong>${escapeHTML(formatMoney(finance.expenseTotal))}</strong>
+    </div>
+    <div class="split__item">
+      <span>Savings</span>
+      <strong>${escapeHTML(formatMoney(finance.savingsTotal))}</strong>
+    </div>
+    <div class="split__item split__item--end${finance.isNegative ? ' is-negative' : ''}">
+      <span>Remaining</span>
+      <strong>${escapeHTML(finance.hasSalary ? formatMoney(finance.remaining) : '—')}</strong>
+    </div>`;
+
+  const editButton = $('salaryEditButton');
+  editButton.textContent = record ? 'Edit salary' : 'Add salary';
+  $('salaryClearButton').hidden = !record;
+
+  $('salaryHistoryCount').textContent = state.salaries.length
+    ? `${state.salaries.length} ${state.salaries.length === 1 ? 'month' : 'months'}`
+    : '';
+
+  $('salaryList').innerHTML = state.salaries.length
+    ? `<div class="list-card">${state.salaries.map(salaryRowMarkup).join('')}</div>`
+    : emptyMarkup({
+        icon: 'rupee',
+        title: 'No salary records yet',
+        text: `Add what you earned for ${label}. Each month keeps its own record.`,
+        action: 'Add this month’s salary',
+        actionAttribute: 'data-empty-salary="true"'
+      });
+}
+
+function salaryRowMarkup(record) {
+  const safeId = escapeHTML(record.id);
+  const label = formatMonthKey(record.monthKey);
+  const amount = escapeHTML(formatMoney(record.amount));
+  const meta = record.notes ? escapeHTML(truncate(record.notes, 46)) : 'Monthly salary';
+
+  return `<article class="entry">
+    <button class="entry__main" type="button" data-salary-edit="${safeId}" aria-label="Edit salary for ${escapeHTML(label)}, ${amount}">
+      <span class="entry__avatar entry__avatar--income" aria-hidden="true">${ICON('rupee')}</span>
+      <span class="entry__text">
+        <span class="entry__title">${escapeHTML(label)}</span>
+        <span class="entry__meta">${meta}</span>
+      </span>
+      <span class="entry__amount">${amount}</span>
+    </button>
+    <button class="entry__menu" type="button" data-salary-menu="${safeId}" aria-label="Actions for ${escapeHTML(label)}" aria-haspopup="dialog">
+      ${ICON('more')}
+    </button>
+  </article>`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Savings page                                                               */
+/* -------------------------------------------------------------------------- */
+
+function renderSavingsPage() {
+  const currentKey = currentMonthKey();
+  const monthEntries = savingsForMonth(state.savings, currentKey);
+  const monthTotal = fromPaise(sumSavingsPaise(monthEntries));
+  const total = sumSavings(state.savings);
+  const groups = groupSavingsByMonth(state.savings);
+
+  $('savingsMonthLabel').textContent = formatMonthKey(currentKey);
+  $('savingsMonthTotal').innerHTML = amountMarkup(monthTotal);
+  $('savingsMonthTotal').setAttribute('aria-label', `${formatMoney(monthTotal)} saved this month`);
+  $('savingsMonthMeta').textContent = monthEntries.length
+    ? `${savingWord(monthEntries.length)} this month`
+    : 'No entries yet this month';
+  $('savingsMonthCount').textContent = monthEntries.length ? savingWord(monthEntries.length) : '';
+
+  $('savingsMonthList').innerHTML = monthEntries.length
+    ? `<div class="list-card">${monthEntries.map(savingRowMarkup).join('')}</div>`
+    : emptyMarkup({
+        icon: 'savings',
+        title: 'Nothing saved yet this month',
+        text: 'Money you set aside lives here. It is never treated as an expense.',
+        action: 'Add savings',
+        actionAttribute: 'data-empty-saving="true"'
+      });
+
+  renderSavingsTotal({ groups, total, currentKey });
+  renderSavingsTab();
+}
+
+function renderSavingsTotal({ groups, total, currentKey }) {
+  const previousKey = shiftMonth(currentKey, -1);
+  const thisMonth = fromPaise(sumSavingsPaise(savingsForMonth(state.savings, currentKey)));
+  const lastMonth = fromPaise(sumSavingsPaise(savingsForMonth(state.savings, previousKey)));
+  const delta = toPaise(thisMonth) - toPaise(lastMonth);
+
+  $('savingsTotalAmount').innerHTML = amountMarkup(total);
+  $('savingsTotalAmount').setAttribute('aria-label', `${formatMoney(total)} total savings`);
+  $('savingsMonthsCount').textContent = groups.length
+    ? `Across ${groups.length} ${groups.length === 1 ? 'month' : 'months'}`
+    : 'No savings recorded yet';
+
+  const growth = $('savingsGrowth');
+  growth.textContent = delta === 0
+    ? formatMoney(0)
+    : `${delta > 0 ? '+' : '−'}${formatMoney(Math.abs(fromPaise(delta)))}`;
+  growth.classList.toggle('is-up', delta > 0);
+  growth.classList.toggle('is-down', delta < 0);
+  $('savingsGrowth').setAttribute('aria-label', delta === 0 ? 'No change' : `${delta > 0 ? 'Up' : 'Down'} ${formatMoney(Math.abs(fromPaise(delta)))}`);
+  $('savingsGrowthMeta').textContent = `in ${formatMonthKey(currentKey)} compared with ${formatMonthKey(previousKey)}`;
+
+  const detailLabel = formatMonthKey(state.savingsMonth);
+  const detailEntries = savingsForMonth(state.savings, state.savingsMonth);
+  const detailTotal = fromPaise(sumSavingsPaise(detailEntries));
+  $('savingsTotalMonthLabel').textContent = detailLabel;
+  $('savingsTotalMonthAmount').textContent = formatMoney(detailTotal);
+  $('savingsTotalMonthMeta').textContent = detailEntries.length
+    ? `${savingWord(detailEntries.length)} saved`
+    : `No entries in ${detailLabel}`;
+  $('savingsTotalMonthList').innerHTML = detailEntries.length
+    ? `<div class="list-card">${detailEntries.map(savingRowMarkup).join('')}</div>`
+    : `<p class="savings-month__empty">Navigate to another month or add savings.</p>`;
+
+  $('savingsAllMonthsCount').textContent = groups.length ? `${groups.length} total` : '';
+  $('savingsMonthGroups').innerHTML = groups.length
+    ? `<div class="list-card">${groups.map(group => `
+        <button class="month-row" type="button" data-savings-month="${escapeHTML(group.key)}" aria-pressed="${group.key === state.savingsMonth}">
+          <span class="month-row__icon" aria-hidden="true">${ICON('calendar')}</span>
+          <span class="month-row__text">
+            <strong>${escapeHTML(group.label)}</strong>
+            <small>${escapeHTML(savingWord(group.count))}</small>
+          </span>
+          <span class="month-row__amount">${escapeHTML(formatMoney(group.total))}</span>
+          ${ICON('chevron')}
+        </button>
+      `).join('')}</div>`
+    : emptyMarkup({
+        icon: 'savings',
+        title: 'No savings history',
+        text: 'Add your first savings entry to start building the total.',
+        action: 'Add savings',
+        actionAttribute: 'data-empty-saving="true"'
+      });
+}
+
+function savingRowMarkup(record) {
+  const safeId = escapeHTML(record.id);
+  const title = record.description ? escapeHTML(record.description) : 'Savings';
+  const meta = escapeHTML(formatDate(record.date));
+  const amount = escapeHTML(formatMoney(record.amount));
+
+  return `<article class="entry">
+    <button class="entry__main" type="button" data-saving-edit="${safeId}" aria-label="Edit ${title}, ${amount}, ${meta}">
+      <span class="entry__avatar entry__avatar--saving" aria-hidden="true">${ICON('savings')}</span>
+      <span class="entry__text">
+        <span class="entry__title">${title}</span>
+        <span class="entry__meta">${meta}</span>
+      </span>
+      <span class="entry__amount entry__amount--saving">+${amount}</span>
+    </button>
+    <button class="entry__menu" type="button" data-saving-menu="${safeId}" aria-label="Actions for ${title}" aria-haspopup="dialog">
+      ${ICON('more')}
+    </button>
+  </article>`;
+}
+
+function renderSavingsTab() {
+  const monthTab = state.savingsTab === 'month';
+  for (const [id, isMonth] of [['savingsTabMonth', true], ['savingsTabTotal', false]]) {
+    const tab = $(id);
+    tab.classList.toggle('is-active', isMonth === monthTab);
+    tab.setAttribute('aria-selected', String(isMonth === monthTab));
+    tab.tabIndex = isMonth === monthTab ? 0 : -1;
+  }
+  $('savingsMonthPanel').hidden = !monthTab;
+  $('savingsTotalPanel').hidden = monthTab;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Views and months                                                           */
 /* -------------------------------------------------------------------------- */
 
 function showView(view) {
-  if (view !== 'home' && view !== 'history') return;
+  if (!VIEWS.includes(view)) return;
   state.view = view;
-  $('view-home').hidden = view !== 'home';
-  $('view-history').hidden = view !== 'history';
+  for (const name of VIEWS) $(`view-${name}`).hidden = name !== view;
 
   document.querySelectorAll('.dock__tab').forEach(tab => {
     const active = tab.dataset.view === view;
@@ -335,11 +692,17 @@ function showView(view) {
     else tab.removeAttribute('aria-current');
   });
 
-  document.title = view === 'history' ? 'History — Spendly' : 'Spendly — Expense Tracker';
-  if (view === 'history') {
+  document.title = VIEW_TITLES[view];
+
+  if (view === 'expenses') {
     $('search').value = state.search;
-    renderHistory(summarize(state.expenses, new Date()));
+    renderExpensesPage(summarize(state.expenses, new Date()));
+  } else if (view === 'salary') {
+    renderSalaryPage();
+  } else if (view === 'savings') {
+    renderSavingsPage();
   }
+
   window.scrollTo(0, 0);
 }
 
@@ -351,13 +714,102 @@ function selectPeriod(period) {
   renderGlance(summary);
 }
 
+function shiftFinanceMonth(delta) {
+  state.financeMonth = shiftMonth(state.financeMonth, delta);
+  renderFinance();
+}
+
+function shiftSalaryMonth(delta, animate = true) {
+  state.salaryMonth = shiftMonth(state.salaryMonth, delta);
+  renderSalaryPage();
+  if (animate) pulseMonthChange(delta);
+}
+
+function setSalaryMonth(monthKey) {
+  if (!isMonthKey(monthKey) || monthKey === state.salaryMonth) return;
+  const direction = monthKey > state.salaryMonth ? 1 : -1;
+  state.salaryMonth = monthKey;
+  renderSalaryPage();
+  pulseMonthChange(direction);
+}
+
+/** A short, restrained slide of the salary figure when the month changes. */
+function pulseMonthChange(direction) {
+  if (prefersReducedMotion()) return;
+  const card = $('salaryAmount');
+  card.classList.remove('is-shifting-left', 'is-shifting-right');
+  void card.offsetWidth;
+  card.classList.add(direction > 0 ? 'is-shifting-right' : 'is-shifting-left');
+  window.setTimeout(() => card.classList.remove('is-shifting-left', 'is-shifting-right'), 260);
+}
+
+function populatePickerMonthOptions() {
+  const currentYear = new Date().getFullYear();
+  const pickerYears = new Set([currentYear]);
+  for (let year = currentYear - 6; year <= currentYear + 3; year += 1) pickerYears.add(year);
+  for (const salary of state.salaries) {
+    const year = Number(salary.monthKey.slice(0, 4));
+    if (Number.isInteger(year)) pickerYears.add(year);
+  }
+  const selectedYear = Number(state.salaryMonth.slice(0, 4));
+  pickerYears.add(selectedYear);
+
+  $('pickerYearSelect').innerHTML = [...pickerYears]
+    .sort((a, b) => a - b)
+    .map(year => `<option value="${year}">${year}</option>`)
+    .join('');
+  $('pickerMonthSelect').innerHTML = MONTH_NAMES
+    .map((name, index) => `<option value="${String(index + 1).padStart(2, '0')}">${escapeHTML(name)}</option>`)
+    .join('');
+}
+
+function openMonthPicker() {
+  if (!state.ready) return;
+  populatePickerMonthOptions();
+  $('pickerYearSelect').value = state.salaryMonth.slice(0, 4);
+  $('pickerMonthSelect').value = state.salaryMonth.slice(5, 7);
+  openDialog($('monthPickerSheet'));
+  $('pickerMonthSelect').focus();
+}
+
+function closeMonthPicker() {
+  closeDialog($('monthPickerSheet'));
+}
+
+function handleMonthPickerSubmit(event) {
+  event.preventDefault();
+  const target = `${$('pickerYearSelect').value}-${$('pickerMonthSelect').value}`;
+  closeMonthPicker();
+  setSalaryMonth(target);
+}
+
+function shiftSavingsMonth(delta) {
+  state.savingsMonth = shiftMonth(state.savingsMonth, delta);
+  renderSavingsTotal({
+    groups: groupSavingsByMonth(state.savings),
+    total: sumSavings(state.savings),
+    currentKey: currentMonthKey()
+  });
+}
+
+function selectSavingsTab(tab) {
+  if (tab !== 'month' && tab !== 'total') return;
+  state.savingsTab = tab;
+  renderSavingsTab();
+}
+
 function applyLaunchParams() {
   const params = new URLSearchParams(window.location.search);
   const view = params.get('view');
   const action = params.get('action');
 
-  if (view === 'history') showView('history');
+  if (view === 'history') showView('expenses');
+  else if (VIEWS.includes(view)) showView(view);
+
   if (action === 'add') openExpenseSheet();
+  else if (action === 'add-salary') openSalarySheet();
+  else if (action === 'add-saving') openSavingSheet();
+
   if (view || action) {
     window.history.replaceState({}, '', window.location.pathname + window.location.hash);
   }
@@ -376,21 +828,20 @@ function openExpenseSheet(id = null) {
     return;
   }
 
-  state.editingId = record?.id ?? null;
+  state.editingExpenseId = record?.id ?? null;
   $('expenseSheetTitle').textContent = record ? 'Edit expense' : 'Add expense';
   $('expenseSheetSub').textContent = record ? 'Changes stay on this device' : 'Saved on this device';
-  setSaving(false, Boolean(record));
+  setExpenseSaving(false, Boolean(record));
 
   $('expenseForm').reset();
   $('amountInput').value = record ? Number(record.amount).toFixed(2) : '';
   $('descriptionInput').value = record?.description ?? '';
   $('dateInput').value = record?.date ?? localToday();
-  clearFormErrors();
+  clearExpenseErrors();
   syncQuickDates();
 
   const sheet = $('expenseSheet');
-  if (!sheet.open) sheet.showModal();
-  syncScrollLock();
+  openDialog(sheet);
   $('expenseSheet').querySelector('.sheet__body').scrollTop = 0;
 
   if (!record) {
@@ -405,10 +856,10 @@ function closeExpenseSheet() {
 
 async function handleExpenseSubmit(event) {
   event.preventDefault();
-  if (state.saving || !state.repo) return;
+  if (state.savingExpense || !state.repo) return;
 
-  clearFormErrors();
-  const editingId = state.editingId;
+  clearExpenseErrors();
+  const editingId = state.editingExpenseId;
   const wasEditing = Boolean(editingId);
   const checked = validateExpenseInput({
     amount: $('amountInput').value,
@@ -417,37 +868,39 @@ async function handleExpenseSubmit(event) {
   });
 
   if (!checked.ok) {
-    showFieldErrors(checked.errors);
+    showExpenseErrors(checked.errors);
     return;
   }
 
-  state.saving = true;
-  setSaving(true, wasEditing);
+  state.savingExpense = true;
+  setExpenseSaving(true, wasEditing);
+  const session = $('expenseSheet').dataset.session;
 
   try {
     if (wasEditing) await state.repo.update(editingId, checked.value);
     else await state.repo.create(checked.value);
 
-    await refreshExpenses();
-    closeExpenseSheet();
+    await refreshAll();
+    // Only close the sheet the save came from; a fast second tap may have reopened it.
+    if (isSameDialogSession($('expenseSheet'), session)) closeExpenseSheet();
     render();
     showToast(wasEditing ? 'Expense updated.' : 'Expense saved.');
   } catch (error) {
-    console.error('Could not save expense:', error);
     if (error instanceof ValidationError) {
-      showFieldErrors(error.errors);
+      showExpenseErrors(error.errors);
     } else if (error instanceof NotFoundError) {
-      showFormError('That expense no longer exists. Close this sheet and try again.');
+      showFormError('formError', 'That expense no longer exists. Close this sheet and try again.');
     } else {
-      showFormError('Couldn’t save to this device. Check browser storage and try again.');
+      console.error('Could not save expense:', error);
+      showFormError('formError', 'Couldn’t save to this device. Check browser storage and try again.');
     }
   } finally {
-    state.saving = false;
-    setSaving(false, wasEditing);
+    state.savingExpense = false;
+    setExpenseSaving(false, wasEditing);
   }
 }
 
-function setSaving(isSaving, wasEditing) {
+function setExpenseSaving(isSaving, wasEditing) {
   $('saveButton').disabled = isSaving;
   $('saveButton').setAttribute('aria-busy', String(isSaving));
   $('saveButton').textContent = isSaving
@@ -455,11 +908,11 @@ function setSaving(isSaving, wasEditing) {
     : (wasEditing ? 'Update expense' : 'Save expense');
 }
 
-function clearFormErrors() {
+function clearExpenseErrors() {
   $('formError').hidden = true;
   $('formError').textContent = '';
-  for (const name of Object.keys(FIELD_INPUTS)) {
-    const input = $(FIELD_INPUTS[name]);
+  for (const name of Object.keys(EXPENSE_FIELDS)) {
+    const input = $(EXPENSE_FIELDS[name]);
     const error = $(`${name}Error`);
     if (input) input.removeAttribute('aria-invalid');
     if (error) {
@@ -469,10 +922,10 @@ function clearFormErrors() {
   }
 }
 
-function showFieldErrors(errors) {
+function showExpenseErrors(errors) {
   let first = null;
   for (const [name, message] of Object.entries(errors)) {
-    const input = $(FIELD_INPUTS[name]);
+    const input = $(EXPENSE_FIELDS[name]);
     const error = $(`${name}Error`);
     if (!input || !error) continue;
     input.setAttribute('aria-invalid', 'true');
@@ -483,9 +936,39 @@ function showFieldErrors(errors) {
   first?.focus();
 }
 
-function showFormError(message) {
-  $('formError').textContent = message;
-  $('formError').hidden = false;
+function showFormError(id, message) {
+  const element = $(id);
+  element.textContent = message;
+  element.hidden = false;
+}
+
+function clearFieldGroup(fields) {
+  for (const [inputId, errorId] of Object.values(fields)) {
+    const input = $(inputId);
+    const error = $(errorId);
+    if (input) input.removeAttribute('aria-invalid');
+    if (error) {
+      error.hidden = true;
+      error.textContent = '';
+    }
+  }
+}
+
+function showFieldGroupErrors(fields, errors) {
+  let first = null;
+  for (const [name, message] of Object.entries(errors)) {
+    const pair = fields[name];
+    if (!pair) continue;
+    const [inputId, errorId] = pair;
+    const input = $(inputId);
+    const error = $(errorId);
+    if (!input || !error) continue;
+    input.setAttribute('aria-invalid', 'true');
+    error.textContent = message;
+    error.hidden = false;
+    if (!first) first = input;
+  }
+  first?.focus();
 }
 
 function syncQuickDates() {
@@ -496,6 +979,240 @@ function syncQuickDates() {
     const expected = button.dataset.quickDate === 'today' ? today : yesterday;
     button.setAttribute('aria-pressed', String(value === expected));
   });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Salary form                                                                */
+/* -------------------------------------------------------------------------- */
+
+function populateMonthOptions() {
+  const currentYear = new Date().getFullYear();
+  const years = [];
+  for (let year = currentYear - 6; year <= currentYear + 3; year += 1) years.push(year);
+
+  $('salaryYearSelect').innerHTML = years
+    .map(year => `<option value="${year}">${year}</option>`)
+    .join('');
+  $('salaryMonthSelect').innerHTML = MONTH_NAMES
+    .map((name, index) => `<option value="${String(index + 1).padStart(2, '0')}">${escapeHTML(name)}</option>`)
+    .join('');
+}
+
+function setSalaryMonthSelects(monthKey) {
+  const year = monthKey.slice(0, 4);
+  if (![...$('salaryYearSelect').options].some(option => option.value === year)) {
+    const option = document.createElement('option');
+    option.value = year;
+    option.textContent = year;
+    $('salaryYearSelect').appendChild(option);
+  }
+  $('salaryYearSelect').value = year;
+  $('salaryMonthSelect').value = monthKey.slice(5, 7);
+}
+
+function readSalaryMonthKey() {
+  return `${$('salaryYearSelect').value}-${$('salaryMonthSelect').value}`;
+}
+
+function openSalarySheet(id = null, monthKey = state.salaryMonth) {
+  if (!state.ready || !state.salaryRepo) return;
+
+  const record = id ? state.salaries.find(item => item.id === id) : null;
+  if (id && !record) {
+    showToast('That salary record is no longer here.', { tone: 'error' });
+    return;
+  }
+
+  state.editingSalaryId = record?.id ?? null;
+  $('salarySheetTitle').textContent = record ? 'Edit salary' : 'Add salary';
+  $('salarySheetSub').textContent = record ? 'Changes stay on this device' : 'One record per month';
+  setSalarySaving(false, Boolean(record));
+
+  $('salaryForm').reset();
+  $('salaryAmountInput').value = record ? Number(record.amount).toFixed(2) : '';
+  setSalaryMonthSelects(record?.monthKey ?? (monthKey || currentMonthKey()));
+  $('salaryNotesInput').value = record?.notes ?? '';
+  clearSalaryErrors();
+
+  const sheet = $('salarySheet');
+  openDialog(sheet);
+  sheet.querySelector('.sheet__body').scrollTop = 0;
+
+  if (!record) {
+    $('salaryAmountInput').focus();
+    $('salaryAmountInput').select();
+  }
+}
+
+function closeSalarySheet() {
+  closeDialog($('salarySheet'));
+}
+
+function clearSalaryErrors() {
+  $('salaryFormError').hidden = true;
+  $('salaryFormError').textContent = '';
+  clearFieldGroup(SALARY_FIELDS);
+}
+
+async function handleSalarySubmit(event) {
+  event.preventDefault();
+  if (state.savingSalary || !state.salaryRepo) return;
+
+  clearSalaryErrors();
+  const editingId = state.editingSalaryId;
+  const wasEditing = Boolean(editingId);
+  const input = {
+    amount: $('salaryAmountInput').value,
+    monthKey: readSalaryMonthKey(),
+    notes: $('salaryNotesInput').value
+  };
+
+  if (!isMonthKey(input.monthKey)) {
+    showFieldGroupErrors(SALARY_FIELDS, { monthKey: 'Choose a valid month.' });
+    return;
+  }
+
+  state.savingSalary = true;
+  setSalarySaving(true, wasEditing);
+  const session = $('salarySheet').dataset.session;
+
+  try {
+    if (wasEditing) await state.salaryRepo.update(editingId, input);
+    else await state.salaryRepo.create(input);
+
+    await refreshAll();
+    state.salaryMonth = input.monthKey;
+    state.financeMonth = input.monthKey;
+    if (isSameDialogSession($('salarySheet'), session)) closeSalarySheet();
+    render();
+    showToast(wasEditing ? 'Salary updated.' : 'Salary saved.');
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      showFieldGroupErrors(SALARY_FIELDS, error.errors);
+    } else if (error instanceof DuplicateMonthError) {
+      showFormError('salaryFormError', error.message);
+      $('salaryMonthSelect').focus();
+    } else if (error instanceof NotFoundError) {
+      showFormError('salaryFormError', 'That salary record no longer exists. Close this sheet and try again.');
+    } else {
+      console.error('Could not save salary:', error);
+      showFormError('salaryFormError', 'Couldn’t save to this device. Check browser storage and try again.');
+    }
+  } finally {
+    state.savingSalary = false;
+    setSalarySaving(false, wasEditing);
+  }
+}
+
+function setSalarySaving(isSaving, wasEditing) {
+  $('saveSalaryButton').disabled = isSaving;
+  $('saveSalaryButton').setAttribute('aria-busy', String(isSaving));
+  $('saveSalaryButton').textContent = isSaving
+    ? 'Saving…'
+    : (wasEditing ? 'Update salary' : 'Save salary');
+}
+
+/* -------------------------------------------------------------------------- */
+/* Savings form                                                               */
+/* -------------------------------------------------------------------------- */
+
+function defaultSavingDate(monthKey) {
+  const today = localToday();
+  const bounds = monthBounds(monthKey);
+  if (!bounds) return today;
+  if (bounds.start > today) return today;
+  return bounds.lastDay < today ? bounds.lastDay : today;
+}
+
+function openSavingSheet(id = null, options = {}) {
+  if (!state.ready || !state.savingsRepo) return;
+
+  const record = id ? state.savings.find(item => item.id === id) : null;
+  if (id && !record) {
+    showToast('That savings entry is no longer here.', { tone: 'error' });
+    return;
+  }
+
+  state.editingSavingId = record?.id ?? null;
+  $('savingSheetTitle').textContent = record ? 'Edit savings' : 'Add savings';
+  $('savingSheetSub').textContent = record ? 'Changes stay on this device' : 'Kept separate from expenses';
+  setSavingSaving(false, Boolean(record));
+
+  $('savingForm').reset();
+  $('savingAmountInput').value = record ? Number(record.amount).toFixed(2) : '';
+  $('savingDateInput').max = localToday();
+  $('savingDateInput').value = record?.date ?? defaultSavingDate(options.monthKey ?? state.savingsMonth);
+  $('savingDescriptionInput').value = record?.description ?? '';
+  clearSavingErrors();
+
+  const sheet = $('savingSheet');
+  openDialog(sheet);
+  sheet.querySelector('.sheet__body').scrollTop = 0;
+
+  if (!record) {
+    $('savingAmountInput').focus();
+    $('savingAmountInput').select();
+  }
+}
+
+function closeSavingSheet() {
+  closeDialog($('savingSheet'));
+}
+
+function clearSavingErrors() {
+  $('savingFormError').hidden = true;
+  $('savingFormError').textContent = '';
+  clearFieldGroup(SAVING_FIELDS);
+}
+
+async function handleSavingSubmit(event) {
+  event.preventDefault();
+  if (state.savingEntry || !state.savingsRepo) return;
+
+  clearSavingErrors();
+  const editingId = state.editingSavingId;
+  const wasEditing = Boolean(editingId);
+  const input = {
+    amount: $('savingAmountInput').value,
+    date: $('savingDateInput').value,
+    description: $('savingDescriptionInput').value
+  };
+
+  state.savingEntry = true;
+  setSavingSaving(true, wasEditing);
+  const session = $('savingSheet').dataset.session;
+
+  try {
+    const saved = wasEditing
+      ? await state.savingsRepo.update(editingId, input)
+      : await state.savingsRepo.create(input);
+
+    await refreshAll();
+    if (saved?.monthKey) state.savingsMonth = saved.monthKey;
+    if (isSameDialogSession($('savingSheet'), session)) closeSavingSheet();
+    render();
+    showToast(wasEditing ? 'Savings updated.' : 'Savings added.');
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      showFieldGroupErrors(SAVING_FIELDS, error.errors);
+    } else if (error instanceof NotFoundError) {
+      showFormError('savingFormError', 'That savings entry no longer exists. Close this sheet and try again.');
+    } else {
+      console.error('Could not save savings:', error);
+      showFormError('savingFormError', 'Couldn’t save to this device. Check browser storage and try again.');
+    }
+  } finally {
+    state.savingEntry = false;
+    setSavingSaving(false, wasEditing);
+  }
+}
+
+function setSavingSaving(isSaving, wasEditing) {
+  $('saveSavingButton').disabled = isSaving;
+  $('saveSavingButton').setAttribute('aria-busy', String(isSaving));
+  $('saveSavingButton').textContent = isSaving
+    ? 'Saving…'
+    : (wasEditing ? 'Update savings' : 'Save savings');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -525,14 +1242,14 @@ async function deleteExpense(id) {
 
   try {
     await state.repo.remove(id);
-    await refreshExpenses();
+    await refreshAll();
     render();
     showToast(`“${truncate(expense.description, 34)}” deleted.`, {
       actionLabel: 'Undo',
       duration: 7000,
       onAction: async () => {
         await state.repo.restore(expense);
-        await refreshExpenses();
+        await refreshAll();
         render();
         showToast('Expense restored.');
       }
@@ -540,6 +1257,120 @@ async function deleteExpense(id) {
   } catch (error) {
     console.error('Could not delete expense:', error);
     showToast('Couldn’t delete that expense. It is still saved.', { tone: 'error', duration: 6000 });
+  }
+}
+
+function openSalaryActions(id) {
+  const record = state.salaries.find(item => item.id === id);
+  if (!record) {
+    showToast('That salary record is no longer here.', { tone: 'error' });
+    return;
+  }
+
+  openActionSheet({
+    title: formatMonthKey(record.monthKey),
+    message: `${formatMoney(record.amount)}${record.notes ? ` · ${record.notes}` : ''}`,
+    actions: [
+      { label: 'Edit salary', icon: 'pencil', onSelect: () => openSalarySheet(record.id) },
+      {
+        label: 'Remove salary',
+        icon: 'trash',
+        tone: 'danger',
+        onSelect: () => confirmDeleteSalary(record)
+      }
+    ]
+  });
+}
+
+function confirmDeleteSalary(record) {
+  openActionSheet({
+    title: 'Remove this salary?',
+    message: `The salary for ${formatMonthKey(record.monthKey)} will be deleted. That month’s expenses and savings stay untouched.`,
+    actions: [{
+      label: 'Remove salary',
+      icon: 'trash',
+      tone: 'danger',
+      onSelect: () => deleteSalary(record)
+    }]
+  });
+}
+
+async function deleteSalary(record) {
+  if (!state.salaryRepo) return;
+  try {
+    await state.salaryRepo.remove(record.id);
+    await refreshAll();
+    render();
+    showToast(`Salary for ${formatMonthKey(record.monthKey)} removed.`, {
+      actionLabel: 'Undo',
+      duration: 7000,
+      onAction: async () => {
+        await state.salaryRepo.restore(record);
+        await refreshAll();
+        render();
+        showToast('Salary restored.');
+      }
+    });
+  } catch (error) {
+    console.error('Could not remove salary:', error);
+    showToast('Couldn’t remove that salary. It is still saved.', { tone: 'error', duration: 6000 });
+  }
+}
+
+function openSavingActions(id) {
+  const record = state.savings.find(item => item.id === id);
+  if (!record) {
+    showToast('That savings entry is no longer here.', { tone: 'error' });
+    return;
+  }
+
+  openActionSheet({
+    title: record.description || 'Savings',
+    message: `${formatDate(record.date)} · ${formatMoney(record.amount)}`,
+    actions: [
+      { label: 'Edit savings', icon: 'pencil', onSelect: () => openSavingSheet(record.id) },
+      {
+        label: 'Delete savings',
+        icon: 'trash',
+        tone: 'danger',
+        onSelect: () => confirmDeleteSaving(record)
+      }
+    ]
+  });
+}
+
+function confirmDeleteSaving(record) {
+  openActionSheet({
+    title: 'Delete this savings entry?',
+    message: `${formatMoney(record.amount)} saved on ${formatDate(record.date)} will be removed from your savings. You can undo straight after.`,
+    actions: [{
+      label: 'Delete savings',
+      icon: 'trash',
+      tone: 'danger',
+      onSelect: () => deleteSaving(record)
+    }]
+  });
+}
+
+async function deleteSaving(record) {
+  if (!state.savingsRepo) return;
+  try {
+    await state.savingsRepo.remove(record.id);
+    await refreshAll();
+    render();
+    showToast('Savings entry deleted.', {
+      actionLabel: 'Undo',
+      duration: 7000,
+      onAction: async () => {
+        await state.savingsRepo.restore(record);
+        await refreshAll();
+        render();
+        showToast('Savings entry restored.');
+      }
+    });
+  } catch (error) {
+    console.error('Could not delete savings:', error);
+    showToast('Couldn’t delete that entry. It is still saved.', { tone: 'error', duration: 6000 });
   }
 }
 
@@ -576,18 +1407,28 @@ function exportCsv() {
   showToast('CSV downloaded.');
 }
 
-function backupPayload(expenses = state.expenses) {
+function snapshotData() {
   return {
-    app: 'Spendly',
-    version: 2,
-    exportedAt: new Date().toISOString(),
-    expenses: sortExpenses(expenses)
+    expenses: state.expenses.map(record => ({ ...record })),
+    salaries: state.salaries.map(record => ({ ...record })),
+    savings: state.savings.map(record => ({ ...record }))
   };
 }
 
-function downloadBackup(filename = `spendly-backup-${localToday()}.json`, expenses = state.expenses) {
+function backupPayload(data = snapshotData()) {
+  return {
+    app: 'Spendly',
+    version: 3,
+    exportedAt: new Date().toISOString(),
+    expenses: sortExpenses(data.expenses ?? []),
+    salaries: [...(data.salaries ?? [])],
+    savings: [...(data.savings ?? [])]
+  };
+}
+
+function downloadBackup(filename = `spendly-backup-${localToday()}.json`, data = snapshotData()) {
   downloadBlob(
-    new Blob([JSON.stringify(backupPayload(expenses), null, 2)], { type: 'application/json' }),
+    new Blob([JSON.stringify(backupPayload(data), null, 2)], { type: 'application/json' }),
     filename
   );
 }
@@ -595,6 +1436,12 @@ function downloadBackup(filename = `spendly-backup-${localToday()}.json`, expens
 function generateImportId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `sp_import_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function applyBackup(data) {
+  await state.repo.replaceAll(data.expenses ?? []);
+  if (Array.isArray(data.salaries)) await state.salaryRepo.replaceAll(data.salaries);
+  if (Array.isArray(data.savings)) await state.savingsRepo.replaceAll(data.savings);
 }
 
 async function handleRestoreFile(file) {
@@ -620,11 +1467,20 @@ async function handleRestoreFile(file) {
       return;
     }
 
-    const checked = candidate.map(record => normalizeExpenseRecord(record, {
-      now: () => new Date(),
-      makeId: generateImportId
-    }));
-    const invalid = checked.filter(result => !result.ok).length;
+    const options = { now: () => new Date(), makeId: generateImportId };
+    const checkedExpenses = candidate.map(record => normalizeExpenseRecord(record, options));
+    const checkedSalaries = Array.isArray(parsed?.salaries)
+      ? parsed.salaries.map(record => normalizeSalaryRecord(record, options))
+      : null;
+    const checkedSavings = Array.isArray(parsed?.savings)
+      ? parsed.savings.map(record => normalizeSavingRecord(record, options))
+      : null;
+
+    const invalid = [
+      ...checkedExpenses.filter(result => !result.ok),
+      ...(checkedSalaries ?? []).filter(result => !result.ok),
+      ...(checkedSavings ?? []).filter(result => !result.ok)
+    ].length;
     if (invalid) {
       showToast(
         `That backup has ${invalid} unreadable record${invalid === 1 ? '' : 's'}. Nothing was changed.`,
@@ -633,15 +1489,28 @@ async function handleRestoreFile(file) {
       return;
     }
 
-    const records = checked.map(result => result.value);
+    const salaries = checkedSalaries ? checkedSalaries.map(result => result.value) : null;
+    if (salaries) {
+      const months = new Set(salaries.map(record => record.monthKey));
+      if (months.size !== salaries.length) {
+        showToast('That backup has two salaries for the same month. Nothing was changed.', { tone: 'error', duration: 8000 });
+        return;
+      }
+    }
+
+    const records = checkedExpenses.map(result => result.value);
+    const savings = checkedSavings ? checkedSavings.map(result => result.value) : null;
     const uniqueIds = new Set(records.map(record => record.id));
     const countLabel = expenseWord(uniqueIds.size);
     const currentCount = expenseWord(state.expenses.length);
-    const snapshot = state.expenses.map(expense => ({ ...expense }));
+    const snapshot = snapshotData();
+    const financeNote = salaries || savings
+      ? ` Salary and savings in this file replace the ones on this device too.`
+      : ' Your salary and savings stay as they are.';
 
     openActionSheet({
       title: 'Restore this backup?',
-      message: `This replaces the ${currentCount} on this device with ${countLabel} from “${file.name}”. A safety copy of your current expenses downloads first, and you can undo this restore straight away.`,
+      message: `This replaces the ${currentCount} on this device with ${countLabel} from “${file.name}”.${financeNote} A safety copy downloads first, and you can undo this restore straight away.`,
       actions: [
         {
           label: `Replace with ${countLabel}`,
@@ -656,23 +1525,32 @@ async function handleRestoreFile(file) {
 
             try {
               const result = await state.repo.replaceAll(records);
-              await refreshExpenses();
+              if (salaries) await state.salaryRepo.replaceAll(salaries);
+              if (savings) await state.savingsRepo.replaceAll(savings);
+              await refreshAll();
               render();
-              showView('history');
+              showView('expenses');
               showToast(`Backup restored — ${expenseWord(result.count)}.`, {
                 actionLabel: 'Undo',
                 duration: 9000,
                 onAction: async () => {
-                  await state.repo.replaceAll(snapshot);
-                  await refreshExpenses();
+                  await applyBackup(snapshot);
+                  await refreshAll();
                   render();
-                  showView('history');
-                  showToast('Your previous expenses are back.');
+                  showView('expenses');
+                  showToast('Your previous data is back.');
                 }
               });
             } catch (error) {
               console.error('Could not restore backup:', error);
-              showToast('That backup couldn’t be saved. Your existing expenses were not changed.', {
+              try {
+                await applyBackup(snapshot);
+                await refreshAll();
+                render();
+              } catch (rollbackError) {
+                console.error('Could not roll back the partial restore:', rollbackError);
+              }
+              showToast('That backup couldn’t be saved. Your existing data was not changed.', {
                 tone: 'error',
                 duration: 8000
               });
@@ -763,8 +1641,7 @@ function openActionSheet({ title, message, actions }) {
     list.appendChild(button);
   }
 
-  sheet.showModal();
-  syncScrollLock();
+  openDialog(sheet);
   $('actionCancel').focus();
 }
 
@@ -772,6 +1649,7 @@ function closeDialog(dialog) {
   if (!dialog.open || dialog.dataset.closing === '1') return;
   dialog.dataset.closing = '1';
   const finish = () => {
+    dialog._closeTimer = 0;
     if (dialog.open) dialog.close();
   };
 
@@ -781,7 +1659,39 @@ function closeDialog(dialog) {
   }
 
   dialog.classList.add('is-closing');
-  window.setTimeout(finish, 210);
+  dialog._closeTimer = window.setTimeout(finish, 210);
+}
+
+/**
+ * Show a dialog, cancelling any close animation still in flight. Without this,
+ * reopening a sheet during its 210 ms close leaves it translated off-screen with
+ * `is-closing` applied, and the pending timer closes it again right after.
+ */
+let dialogSession = 0;
+
+function openDialog(dialog) {
+  window.clearTimeout(dialog._closeTimer);
+  dialog._closeTimer = 0;
+  const wasClosing = dialog.open &&
+    (dialog.dataset.closing === '1' || dialog.classList.contains('is-closing'));
+  delete dialog.dataset.closing;
+  dialog.classList.remove('is-closing');
+
+  if (wasClosing) {
+    // The close animation uses `animation-fill-mode: forwards`, so a dialog
+    // reopened mid-close stays parked off-screen. Replaying showModal() restarts
+    // the open animation from a clean state.
+    dialog.close();
+  }
+  if (!dialog.open) dialog.showModal();
+
+  dialog.dataset.session = String(++dialogSession);
+  syncScrollLock();
+}
+
+/** True when the sheet has not been reopened since `session` was captured. */
+function isSameDialogSession(dialog, session) {
+  return dialog.dataset.session === session;
 }
 
 function syncScrollLock() {
@@ -792,6 +1702,8 @@ function syncScrollLock() {
 function setupDialogs() {
   document.querySelectorAll('dialog').forEach(dialog => {
     dialog.addEventListener('close', () => {
+      window.clearTimeout(dialog._closeTimer);
+      dialog._closeTimer = 0;
       dialog.classList.remove('is-closing');
       delete dialog.dataset.closing;
       syncScrollLock();
@@ -824,7 +1736,7 @@ function updateConnectionUI() {
     : 'Offline';
   $('connection').title = online
     ? 'Saved on this device — available offline after the first visit'
-    : 'Offline — your expenses are saved on this device';
+    : 'Offline — your data is saved on this device';
   $('offlineBanner').hidden = online;
 }
 
@@ -852,7 +1764,7 @@ function renderInstallPrompt() {
 
   const eligible = !isStandalone() &&
     !state.installDismissed &&
-    state.expenses.length > 0 &&
+    hasAnyData() &&
     (Boolean(state.installPrompt) || isIOSDevice());
 
   card.hidden = !eligible;
@@ -962,15 +1874,6 @@ function applyUpdate() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Data refresh                                                               */
-/* -------------------------------------------------------------------------- */
-
-async function refreshExpenses() {
-  if (!state.repo) return;
-  state.expenses = await state.repo.list();
-}
-
-/* -------------------------------------------------------------------------- */
 /* Events                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -1005,19 +1908,137 @@ function bindEvents() {
       if (target.closest('[data-clear-search]')) {
         state.search = '';
         $('search').value = '';
-        renderHistory(summarize(state.expenses, new Date()));
+        renderExpensesPage(summarize(state.expenses, new Date()));
         $('search').focus();
       }
     });
   }
 
   $('addExpenseButton').addEventListener('click', () => openExpenseSheet());
-  $('seeAllButton').addEventListener('click', () => showView('history'));
-  $('allTimeButton').addEventListener('click', () => showView('history'));
+  $('seeAllButton').addEventListener('click', () => showView('expenses'));
+  $('allTimeButton').addEventListener('click', () => showView('expenses'));
 
   $('dock').addEventListener('click', event => {
     const tab = event.target.closest('[data-view]');
     if (tab) showView(tab.dataset.view);
+  });
+
+  document.querySelector('.shortcuts').addEventListener('click', event => {
+    const button = event.target.closest('[data-goto]');
+    if (button) showView(button.dataset.goto);
+  });
+
+  $('financePrevMonth').addEventListener('click', () => shiftFinanceMonth(-1));
+  $('financeNextMonth').addEventListener('click', () => shiftFinanceMonth(1));
+
+  $('salaryPrevMonth').addEventListener('click', () => shiftSalaryMonth(-1));
+  $('salaryNextMonth').addEventListener('click', () => shiftSalaryMonth(1));
+  $('salaryMonthPickerButton').addEventListener('click', openMonthPicker);
+  $('salaryCurrentMonth').addEventListener('click', () => setSalaryMonth(currentMonthKey()));
+
+  $('closeMonthPicker').addEventListener('click', closeMonthPicker);
+  $('monthPickerForm').addEventListener('submit', handleMonthPickerSubmit);
+
+  // Arrow keys move between months while the navigator has focus.
+  $('salaryMonthPickerButton').parentElement.addEventListener('keydown', event => {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      shiftSalaryMonth(-1);
+      $('salaryMonthPickerButton').focus();
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      shiftSalaryMonth(1);
+      $('salaryMonthPickerButton').focus();
+    }
+  });
+
+  $('salaryEditButton').addEventListener('click', () => {
+    const record = findSalaryForMonth(state.salaries, state.salaryMonth);
+    openSalarySheet(record?.id ?? null, state.salaryMonth);
+  });
+
+  $('salaryClearButton').addEventListener('click', () => {
+    const record = findSalaryForMonth(state.salaries, state.salaryMonth);
+    if (record) confirmDeleteSalary(record);
+  });
+
+  $('salaryList').addEventListener('click', event => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    const edit = target.closest('[data-salary-edit]');
+    if (edit) {
+      openSalarySheet(edit.dataset.salaryEdit);
+      return;
+    }
+    const menu = target.closest('[data-salary-menu]');
+    if (menu) {
+      openSalaryActions(menu.dataset.salaryMenu);
+      return;
+    }
+    if (target.closest('[data-empty-salary]')) openSalarySheet();
+  });
+
+  const savingsTablist = $('savingsTabMonth').parentElement;
+  savingsTablist.addEventListener('click', event => {
+    const tab = event.target.closest('[data-savings-tab]');
+    if (tab) selectSavingsTab(tab.dataset.savingsTab);
+  });
+
+  savingsTablist.addEventListener('keydown', event => {
+    const tabs = [...savingsTablist.querySelectorAll('[data-savings-tab]')];
+    const index = tabs.indexOf(document.activeElement);
+    if (index < 0) return;
+
+    let next = null;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabs.length - 1;
+    if (next === null) return;
+
+    event.preventDefault();
+    selectSavingsTab(tabs[next].dataset.savingsTab);
+    tabs[next].focus();
+  });
+
+  $('savingsPrevMonth').addEventListener('click', () => shiftSavingsMonth(-1));
+  $('savingsNextMonth').addEventListener('click', () => shiftSavingsMonth(1));
+  $('addSavingButton').addEventListener('click', () => openSavingSheet());
+  $('addSavingTotalButton').addEventListener('click', () => openSavingSheet(null, { monthKey: state.savingsMonth }));
+
+  for (const list of [$('savingsMonthList'), $('savingsTotalMonthList')]) {
+    list.addEventListener('click', event => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) return;
+      const edit = target.closest('[data-saving-edit]');
+      if (edit) {
+        openSavingSheet(edit.dataset.savingEdit);
+        return;
+      }
+      const menu = target.closest('[data-saving-menu]');
+      if (menu) {
+        openSavingActions(menu.dataset.savingMenu);
+        return;
+      }
+      if (target.closest('[data-empty-saving]')) openSavingSheet();
+    });
+  }
+
+  $('savingsMonthGroups').addEventListener('click', event => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    if (target.closest('[data-empty-saving]')) {
+      openSavingSheet();
+      return;
+    }
+    const row = target.closest('[data-savings-month]');
+    if (!row) return;
+    state.savingsMonth = row.dataset.savingsMonth;
+    renderSavingsTotal({
+      groups: groupSavingsByMonth(state.savings),
+      total: sumSavings(state.savings),
+      currentKey: currentMonthKey()
+    });
   });
 
   $('search').addEventListener('input', event => {
@@ -1025,7 +2046,7 @@ function bindEvents() {
     $('clearSearch').hidden = !normalizeQuery(state.search);
     window.clearTimeout(state.searchTimer);
     state.searchTimer = window.setTimeout(() => {
-      renderHistory(summarize(state.expenses, new Date()));
+      renderExpensesPage(summarize(state.expenses, new Date()));
     }, 90);
   });
 
@@ -1033,7 +2054,7 @@ function bindEvents() {
     state.search = '';
     $('search').value = '';
     $('clearSearch').hidden = true;
-    renderHistory(summarize(state.expenses, new Date()));
+    renderExpensesPage(summarize(state.expenses, new Date()));
     $('search').focus();
   });
 
@@ -1050,7 +2071,16 @@ function bindEvents() {
   $('expenseForm').addEventListener('submit', event => {
     void handleExpenseSubmit(event);
   });
+  $('salaryForm').addEventListener('submit', event => {
+    void handleSalarySubmit(event);
+  });
+  $('savingForm').addEventListener('submit', event => {
+    void handleSavingSubmit(event);
+  });
+
   $('closeExpenseSheet').addEventListener('click', closeExpenseSheet);
+  $('closeSalarySheet').addEventListener('click', closeSalarySheet);
+  $('closeSavingSheet').addEventListener('click', closeSavingSheet);
   $('actionCancel').addEventListener('click', () => closeDialog($('actionSheet')));
 
   for (const button of document.querySelectorAll('[data-quick-date]')) {
@@ -1077,6 +2107,32 @@ function bindEvents() {
     setFieldError('description', null);
     $('formError').hidden = true;
   });
+
+  for (const [inputId, errorId] of Object.values(SALARY_FIELDS)) {
+    $(inputId).addEventListener('input', () => {
+      $(errorId).hidden = true;
+      $(inputId).removeAttribute('aria-invalid');
+      $('salaryFormError').hidden = true;
+    });
+    $(inputId).addEventListener('change', () => {
+      $(errorId).hidden = true;
+      $(inputId).removeAttribute('aria-invalid');
+      $('salaryFormError').hidden = true;
+    });
+  }
+
+  for (const [inputId, errorId] of Object.values(SAVING_FIELDS)) {
+    $(inputId).addEventListener('input', () => {
+      $(errorId).hidden = true;
+      $(inputId).removeAttribute('aria-invalid');
+      $('savingFormError').hidden = true;
+    });
+    $(inputId).addEventListener('change', () => {
+      $(errorId).hidden = true;
+      $(inputId).removeAttribute('aria-invalid');
+      $('savingFormError').hidden = true;
+    });
+  }
 
   $('installClose').addEventListener('click', dismissInstallPrompt);
   $('installButton').addEventListener('click', async () => {
@@ -1133,7 +2189,7 @@ function bindEvents() {
 }
 
 function setFieldError(name, message) {
-  const input = $(FIELD_INPUTS[name]);
+  const input = $(EXPENSE_FIELDS[name]);
   const error = $(`${name}Error`);
   if (!input || !error) return;
 
@@ -1147,3 +2203,4 @@ function setFieldError(name, message) {
     error.hidden = true;
   }
 }
+

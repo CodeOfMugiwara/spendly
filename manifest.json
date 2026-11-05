@@ -1,8 +1,8 @@
 {
   "id": "./",
-  "name": "Spendly — Expense Tracker",
+  "name": "Spendly — Salary, Expenses & Savings",
   "short_name": "Spendly",
-  "description": "A private, offline-first expense tracker. Your expenses stay on this device.",
+  "description": "A private, offline-first salary, expense and savings tracker. Everything stays on this device.",
   "lang": "en-IN",
   "dir": "ltr",
   "start_url": "./",
@@ -48,10 +48,36 @@
       ]
     },
     {
-      "name": "Open history",
-      "short_name": "History",
+      "name": "Open expenses",
+      "short_name": "Expenses",
       "description": "Browse and search every expense",
-      "url": "./?view=history",
+      "url": "./?view=expenses",
+      "icons": [
+        {
+          "src": "./icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Add savings",
+      "short_name": "Savings",
+      "description": "Set money aside",
+      "url": "./?action=add-saving",
+      "icons": [
+        {
+          "src": "./icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Monthly salary",
+      "short_name": "Salary",
+      "description": "Record this month's salary",
+      "url": "./?view=salary",
       "icons": [
         {
           "src": "./icons/icon-192.png",

@@ -1,0 +1,129 @@
+# Spendly — Architecture Context
+
+> **Append or update only.** Do not delete or rewrite existing sections. Add a dated entry for changes and say what it supersedes. Read `memory.md` first.
+
+Last updated: 5 November 2026 (Spendly 3.0.0).
+
+## Shape of the app
+
+```text
+index.html
+  └── js/app.js                     UI: four views, sheets, toasts, service worker glue
+        ├── js/core.js              pure rules: dates, months, paise, validation, finance
+        ├── js/repository.js        ExpenseRepository · SalaryRepository · SavingsRepository
+        └── js/db.js                the only IndexedDB-aware module
+                                      IndexedDBExpenseStore
+                                      IndexedDBSalaryStore
+                                      IndexedDBSavingsStore
+                                      openSpendlyDB() / openExpenseDB() alias
+```
+
+Dependencies point one way: `app → repository → db/db core`. `core.js` imports nothing. No module imports `app.js`.
+
+## Responsibilities
+
+### `js/core.js` (pure, testable in Node)
+- Calendar helpers: local ISO dates, Monday weeks, period bounds, elapsed days.
+- Month keys (`YYYY-MM`): `isMonthKey`, `monthKeyOf`, `currentMonthKey`, `shiftMonth`, `monthBounds`, `formatMonthKey`, `shortMonthLabel`.
+- Money: `roundMoney`, `formatMoney`, `formatMoneyParts`, and the paise layer `toPaise` / `fromPaise`.
+- Validation/normalisation for all three record types.
+- Aggregations: expense summaries, savings grouping, and the single finance rule `computeMonthlyFinance()`.
+- No DOM, no storage, no clock except optional injected `now`.
+
+### `js/db.js`
+- Schema creation/upgrade and every transaction.
+- Three store adapters with a small async surface (`getAll`, `get`, `put`, `delete`, `replaceAll`, index reads, `close`).
+- `IndexedDBSalaryStore` has a unique `by_monthKey` index; `getByMonth` returns one record.
+- `IndexedDBSavingsStore.getByMonth` returns an array (non-unique index).
+- Never validates business rules beyond the unique index.
+
+### `js/repository.js`
+- Public API used by the UI.
+- Generates stable ids (`crypto.randomUUID` with fallback), stamps `createdAt`/`updatedAt` from an injectable clock.
+- Validates before writing, preserves `id`/`createdAt` on update, exposes `restore()` for Undo and `replaceAll()` for backup restore.
+- Translates storage `ConstraintError` into `DuplicateMonthError`.
+- `ExpenseRepository.migrateLegacy()` owns the one-time localStorage import.
+
+### `js/app.js`
+- Boots the database, repositories and legacy migration.
+- Holds one in-memory snapshot: `state.expenses`, `state.salaries`, `state.savings`.
+- After every mutation: `refreshAll()` → `render()` → toast. There is no partial cache.
+- One render function updates all four views, so a salary edit immediately updates the dashboard, the salary page and the savings totals.
+- Owns navigation (`showView`), sheets, validation display, confirmation action sheets, Undo toasts, and the service worker lifecycle.
+
+## Render loop
+
+```text
+mutation → repository → refreshAll()
+          → render()
+               ├── renderHero / renderGlance / renderWeek / renderRecent
+               ├── renderFinance        (dashboard monthly overview)
+               ├── renderExpensesPage
+               ├── renderSalaryPage
+               └── renderSavingsPage → renderSavingsTotal → renderSavingsTab
+          → showToast
+```
+
+Because all four views are rendered on every change, no cross-view invalidation logic exists. The cost is negligible for a personal ledger and removes a whole class of stale-UI bugs.
+
+## Navigation
+
+- Internal view keys: `dashboard`, `expenses`, `salary`, `savings`.
+- `showView()` toggles `#view-<key>`, updates the dock (`data-view`), `aria-current` and `document.title`, scrolls to top.
+- Deep links: `?view=dashboard|expenses|salary|savings`, `?action=add|add-salary|add-saving`. `?view=history` is accepted as a legacy alias for `expenses`. Params are cleared with `replaceState` after applying.
+- Month state is independent per page: `state.financeMonth`, `state.salaryMonth`, `state.savingsMonth`. Saving a salary also sets `financeMonth` (and `salaryMonth`) to the edited month.
+
+## Sheets and dialogs
+
+- Native `<dialog>` with `showModal()`, a shared close animation (`closeDialog`), backdrop click-to-close and `cancel` handling.
+- `openActionSheet()` is reused for row menus **and** destructive confirmations. For a confirmation, a second action sheet is opened from the first action’s `onSelect` after the first is closed.
+- `syncScrollLock()` adds `body.sheet-open` whenever any dialog is open.
+
+## Offline architecture
+
+- `sw.js` precaches the app shell; navigations are served from the cached `index.html`.
+- Cache-first for same-origin static assets; network fallback caches new successes.
+- New workers wait until the user taps Refresh; old `spendly-*` caches are deleted on activate.
+- The service worker never touches IndexedDB.
+- The app has zero network dependencies at runtime, so salary/savings are offline by construction.
+
+## Failure handling
+
+- `initData()` failures show `#fatalError`, hide all views and disable the dock. Blocked upgrades (another tab) get a specific message.
+- Upgrade errors abort the versionchange transaction so IndexedDB rolls back.
+- Repository errors map to inline field errors or sheet-level messages; only unexpected errors reach `console.error`.
+- Backup restore validates everything first, downloads a safety copy, restores sequentially, and attempts a rollback if a later step fails.
+
+## Extension seams
+
+- New collection: add a store in `db.js`, a repository in `repository.js`, pure rules in `core.js`, then one render section and one sheet in `app.js`. Do not put finance logic in the UI.
+- Remote sync later: repositories already expose stable ids + timestamps and the UI never sees IndexedDB. Add an adapter behind the same interface.
+- Do not introduce a framework or build step for this app; the zero-build constraint is deliberate.
+
+---
+
+## Addendum — 5 November 2026: Salary month navigator
+
+The Salary page now owns a complete month navigator instead of only a stepper.
+
+**State.** `state.salaryMonth` (a `YYYY-MM` key) is still the single source of truth for the page. Every render path — amount, notes, status, expenses/savings/remaining split, Add/Edit label — reads from `state.salaryMonth`, so the navigator cannot drift from the data.
+
+**Controls.**
+- `#salaryPrevMonth` / `#salaryNextMonth` → `shiftSalaryMonth(±1)` (`shiftMonth` handles January/December).
+- `#salaryMonthPickerButton` (the month + year label, with a caret) → `openMonthPicker()`, a native `<dialog>` with independent month and year `<select>`s and a **Go to month** submit → `setSalaryMonth(key)`.
+- `#salaryCurrentMonth` → `setSalaryMonth(currentMonthKey())`; the row is `hidden` while the selected month is the current month.
+- ArrowLeft/ArrowRight on the navigator also move months for keyboard users.
+
+**No writes.** All three entry points only assign `state.salaryMonth` and re-render. Salary records are created exclusively by `handleSalarySubmit`, so browsing empty or future months can never create a record.
+
+**Picker years.** `populatePickerMonthOptions()` offers current year −6…+3 plus every year that already has a salary record plus the selected year, so restored historical backups stay reachable.
+
+**Month-change feedback.** `pulseMonthChange(direction)` restarts a 0.26 s slide on `#salaryAmount`, skipped under `prefers-reduced-motion`.
+
+## Addendum — 5 November 2026: dialog reopen race
+
+`closeDialog()` animates with `animation: sheet-down … forwards`, then calls `dialog.close()` after 210 ms. If a sheet was reopened inside that window it could end up parked off-screen, and a save that finished after a reopen would close the *new* sheet.
+
+Two guards now exist:
+1. `openDialog(dialog)` clears the pending timer, and if the dialog is still open mid-close it calls `close()` before `showModal()` so the open animation restarts from a clean state.
+2. Each open stamps `dialog.dataset.session`. Submit handlers capture that value and only call the close helper when `isSameDialogSession()` still matches, so a save never closes a sheet the user reopened with a new entry.

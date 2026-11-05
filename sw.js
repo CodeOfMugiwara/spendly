@@ -12,7 +12,7 @@
  * The worker never opens IndexedDB. Updating the app cannot touch expenses.
  */
 
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v8';
 const CACHE_PREFIX = 'spendly-';
 const CACHE_NAME = `${CACHE_PREFIX}shell-${CACHE_VERSION}`;
 
@@ -148,7 +148,7 @@ function offlineFallback() {
 <main>
   <div class="mark" aria-hidden="true">S</div>
   <h1>Spendly hasn’t been saved offline yet</h1>
-  <p>Connect to the internet and open Spendly once. After that, the app and your saved expenses work offline.</p>
+  <p>Connect to the internet and open Spendly once. After that, the app and your saved expenses, salary and savings work offline.</p>
   <button type="button" onclick="location.reload()">Try again</button>
 </main>
 </body>
