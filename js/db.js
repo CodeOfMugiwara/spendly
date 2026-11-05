@@ -8,6 +8,7 @@
  *   v1  expenses (by_date, by_createdAt, by_date_createdAt), meta
  *   v2  + salaries (by_monthKey — unique), savings (by_monthKey, by_date,
  *       by_date_createdAt)
+ *   v3  + expense salary/source indexes and savings ledger relationship indexes
  *
  * The v2 upgrade only *adds* stores. It never drops, clears or rewrites the
  * existing `expenses` store, so an upgrade cannot lose expense data.
@@ -55,6 +56,7 @@ function ensureFinanceStores(db) {
     savings.createIndex('by_date', 'date', { unique: false });
     savings.createIndex('by_date_createdAt', ['date', 'createdAt'], { unique: false });
   }
+
 }
 
 /** Open (and if needed create or upgrade) the Spendly database. */
@@ -80,6 +82,16 @@ export function openExpenseDB(factory = globalThis.indexedDB) {
             !db.objectStoreNames.contains(SAVINGS_STORE)) {
           ensureFinanceStores(db);
         }
+        const transaction = request.transaction;
+        const expenses = transaction.objectStore(EXPENSES_STORE);
+        if (!expenses.indexNames.contains('by_salaryRecordId')) expenses.createIndex('by_salaryRecordId', 'salaryRecordId', { unique: false });
+        if (!expenses.indexNames.contains('by_paymentSource')) expenses.createIndex('by_paymentSource', 'paymentSource', { unique: false });
+        const savings = transaction.objectStore(SAVINGS_STORE);
+        if (!savings.indexNames.contains('by_type')) savings.createIndex('by_type', 'type', { unique: false });
+        if (!savings.indexNames.contains('by_salaryRecordId')) savings.createIndex('by_salaryRecordId', 'salaryRecordId', { unique: false });
+        // Missing expenseId fields are omitted from this index. The unique
+        // index then guarantees one savings withdrawal per linked expense.
+        if (!savings.indexNames.contains('by_expenseId')) savings.createIndex('by_expenseId', 'expenseId', { unique: true });
       } catch (error) {
         // Abort the versionchange transaction so IndexedDB rolls back to the
         // previous schema instead of leaving a half-created database.

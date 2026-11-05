@@ -101,3 +101,14 @@ Two scenarios were added, taking the browser suite to **15** checks (unit suite 
 Gotcha worth remembering: DOM measurements taken immediately after `waitFor({state:'visible'})` catch the sheet at the *start* of its rise animation, so the button looks off-screen. Wait for the animation to be `finished` before asserting layout.
 
 Debugging tip: `serviceWorkers: 'block'` in a throwaway Playwright context avoids the cached shell hiding local edits while diagnosing.
+
+## Addendum — 6 November 2026: salary-pool and funding-source coverage
+
+The source-aware ledger adds workflows for cross-month allocation by salary entry order, savings contributions, optional old-pool transfers, expenses paid from savings, insufficient-savings blocking, and edits/deletes/Undo across the related records. Real v1 and v2 upgrades remain covered; the v2 fixture verifies timestamp-based pool assignment, preserved transaction dates, `needs_review` flags for unmatched records, and idempotency after reload. Schema v3 adds indexes without clearing stores. Backup/restore coverage now uses format v4 and checks relationship-preserving replacements.
+
+- Current coverage: 56 unit tests and 17 browser scenarios (updated 6 November 2026).
+- The browser scenario seeds salary records and transactions through the UI, then inspects IndexedDB to assert that one expense has exactly one withdrawal and that each salary pool and Savings balance recomputes correctly.
+- Responsive checks still cover 320/390/1440 px and assert no horizontal overflow. The screenshot set is regenerated for the current screens.
+- Timestamp migration assigns legacy transactions to the latest salary at or before their `createdAt`. Records with no reliable salary match are intentionally preserved as unallocated and require manual source review; migration does not guess from the transaction's calendar month.
+
+The suite passed after the migration and UI changes; run `npm test` and `npm run test:e2e` to reproduce. VoiceOver, real iPhone safe areas, and second-origin restore remain manual checks.

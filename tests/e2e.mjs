@@ -138,12 +138,13 @@ async function waitForToastsToClear(page) {
   await page.locator('#toast').waitFor({ state: 'hidden', timeout: 12000 });
 }
 
-async function addExpense(page, { amount, description, date } = {}) {
+async function addExpense(page, { amount, description, date, source = 'salary' } = {}) {
   await page.locator('#addExpenseButton').click();
   await page.locator('#expenseSheet').waitFor({ state: 'visible' });
   await page.locator('#amountInput').fill(String(amount));
   await page.locator('#descriptionInput').fill(description);
   if (date) await page.locator('#dateInput').fill(date);
+  if (source === 'savings') await page.locator('#paidFromSavings').check();
   await page.locator('#saveButton').click();
   await page.locator('#expenseSheet').waitFor({ state: 'hidden', timeout: 8000 });
 }
@@ -185,8 +186,16 @@ async function setSalaryMonth(page, monthKey) {
   await page.locator('#salaryMonthSelect').selectOption(monthKey.slice(5, 7));
 }
 
-async function addSalary(page, { amount, monthKey, notes } = {}) {
+async function addSalary(page, { amount, monthKey, notes, transferChoice = 'Not Now' } = {}) {
   await page.locator('[data-view="salary"]').click();
+  if (monthKey && await page.locator('#salaryMonthLabel').innerText() !== formatMonth(monthKey)) {
+    await page.locator('#salaryMonthPickerButton').click();
+    await page.locator('#monthPickerSheet').waitFor({ state: 'visible' });
+    await page.locator('#pickerMonthSelect').selectOption(monthKey.slice(5, 7));
+    await page.locator('#pickerYearSelect').selectOption(monthKey.slice(0, 4));
+    await page.locator('#pickerGoButton').click();
+    await page.locator('#monthPickerSheet').waitFor({ state: 'hidden' });
+  }
   await page.locator('#salaryEditButton').click();
   await page.locator('#salarySheet').waitFor({ state: 'visible' });
   await page.locator('#salaryAmountInput').fill(String(amount));
@@ -194,6 +203,10 @@ async function addSalary(page, { amount, monthKey, notes } = {}) {
   if (notes) await page.locator('#salaryNotesInput').fill(notes);
   await page.locator('#saveSalaryButton').click();
   await page.locator('#salarySheet').waitFor({ state: 'hidden', timeout: 8000 });
+  if (await page.locator('#actionSheet').isVisible()) {
+    await page.locator('#actionList .action__item').filter({ hasText: transferChoice }).click();
+    await page.locator('#actionSheet').waitFor({ state: 'hidden' });
+  }
 }
 
 async function addSaving(page, { amount, description, fromTotalTab = false } = {}) {
@@ -299,6 +312,9 @@ await run('add, edit, delete, undo, search, CSV, backup and restore work', async
   assert.equal(await page.locator('#glanceSection').isHidden(), true, 'empty dashboard should focus on the first action');
   assert.equal(await page.locator('#recentList [data-empty-add]').isVisible(), true);
 
+  await addSalary(page, { amount: '10000' });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
   await addExpense(page, { amount: '1,250.50', description: 'Team dinner' });
   await waitForToast(page, 'Expense saved.');
   assert.equal(await page.locator('#heroAmount').innerText(), formatMoney(1250.5));
@@ -371,17 +387,17 @@ await run('add, edit, delete, undo, search, CSV, backup and restore work', async
 
   const csv = await downloadFrom(page, () => page.locator('#exportCsv').click());
   assert.match(csv.filename, /^spendly-expenses-\d{4}-\d{2}-\d{2}\.csv$/);
-  assert.match(csv.text, /"Date","Description","Amount \(INR\)"/);
+  assert.match(csv.text, /"Date","Description","Amount \(INR\)","Paid From"/);
   assert.match(csv.text, /"Coffee ""with friends"""/);
   assert.match(csv.text, /"80\.00"/);
 
   const backup = await downloadFrom(page, () => page.locator('#downloadBackup').click());
   const parsedBackup = JSON.parse(backup.text);
   assert.equal(parsedBackup.app, 'Spendly');
-  assert.equal(parsedBackup.version, 3);
+  assert.equal(parsedBackup.version, 4);
   assert.equal(parsedBackup.expenses.length, 1);
   assert.ok(parsedBackup.expenses[0].createdAt);
-  assert.deepEqual(parsedBackup.salaries, []);
+  assert.equal(parsedBackup.salaries.length, 1);
   assert.deepEqual(parsedBackup.savings, []);
 
   const invalidPath = path.join(RESULTS, 'invalid-backup.json');
@@ -434,6 +450,9 @@ await run('the app launches, edits and exports with no network', async () => {
   ];
   await seedLegacy(page, demo);
   await gotoApp(page);
+  await addSalary(page, { amount: '10000' });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
   await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
   await page.waitForFunction(async () => {
     const keys = await caches.keys();
@@ -564,6 +583,9 @@ await run('expenses and the offline shell survive a full browser restart', async
     let page = context.pages()[0] ?? await context.newPage();
     watch(page);
     await gotoApp(page);
+    await addSalary(page, { amount: '10000' });
+    await waitForToast(page, 'Salary saved.');
+    await page.locator('[data-view="dashboard"]').click();
     await addExpense(page, { amount: '321', description: 'Survives a restart' });
     await waitForToast(page, 'Expense saved.');
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
@@ -681,7 +703,7 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   // salary 50,000 - expense 1,000 - savings 1,700 (1,200 + 500)
   assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(47300));
   await page.locator('[data-view="salary"]').click();
-  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(50000));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(47300));
   await page.locator('[data-view="savings"]').click();
   await page.locator('#savingsTabTotal').click();
   assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(1700));
@@ -702,6 +724,102 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   await context.close();
 });
 
+await run('salary pools, balance transfers and savings-funded expenses stay linked', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  await gotoApp(page);
+  const current = monthKeyNow();
+  const previous = shiftMonthKey(current, -1);
+
+  await addSalary(page, { amount: '50000', monthKey: previous });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '5000', description: 'November groceries' });
+  assert.equal(await page.locator('[data-view="salary"]').getAttribute('data-view'), 'salary');
+  await addSaving(page, { amount: '10000', description: 'Set aside before payday' });
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(35000));
+
+  await addSalary(page, { amount: '40000', monthKey: current, transferChoice: 'Move to Savings' });
+  await waitForToast(page, 'moved to Savings.');
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(40000));
+  await page.locator('#salaryPrevMonth').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
+  await page.locator('#salaryNextMonth').click();
+
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '3000', description: 'November fuel' });
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(37000));
+
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '3000', description: 'Savings repair', source: 'savings' });
+  await page.locator('[data-view="savings"]').click();
+  await page.locator('#savingsTabTotal').click();
+  assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(42000));
+  assert.equal(await page.locator('#savingsTotalWithdrawals').innerText(), formatMoney(3000));
+  assert.match(await page.locator('#savingsTotalMonthList').innerText(), /Used for expense/);
+
+  await page.locator('[data-view="dashboard"]').click();
+  await page.locator('#addExpenseButton').click();
+  await page.locator('#amountInput').fill('43000');
+  await page.locator('#descriptionInput').fill('Too large for savings');
+  await page.locator('#paidFromSavings').check();
+  await page.locator('#saveButton').click();
+  await page.locator('#formError').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#formError').innerText(), /Insufficient savings balance/i);
+  await page.locator('#closeExpenseSheet').click();
+  await page.locator('#expenseSheet').waitFor({ state: 'hidden' });
+
+  await page.locator('[data-view="expenses"]').click();
+  await openRowMenu(page, '#historyList', 'Savings repair');
+  await page.locator('#actionList .action__item').filter({ hasText: 'Edit expense' }).click();
+  await page.locator('#expenseSheet').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#paidFromSavings').isChecked(), true);
+  await page.locator('#amountInput').fill('4000');
+  await page.locator('#paidFromSalary').check();
+  await page.locator('#saveButton').click();
+  await page.locator('#expenseSheet').waitFor({ state: 'hidden' });
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(33000));
+  const snapshot = await dbSnapshot(page);
+  const expense = snapshot.records.find(record => record.description === 'Savings repair');
+  assert.equal(expense.paymentSource, 'salary');
+  assert.equal(expense.salaryRecordId, snapshot.salaries.find(record => record.monthKey === current).id);
+  assert.equal(snapshot.savings.filter(record => record.type === 'withdrawal').length, 0);
+  assert.equal(snapshot.savings.filter(record => record.type === 'salary_balance_transfer').length, 1);
+
+  await page.locator('[data-view="savings"]').click();
+  await page.locator('#savingsTabMonth').click();
+  await openRowMenu(page, '#savingsMonthList', `Remaining ${previous} salary`);
+  await page.locator('#actionList .action__item').filter({ hasText: 'Edit savings' }).click();
+  await page.locator('#savingSheet').waitFor({ state: 'visible' });
+  await page.locator('#savingAmountInput').fill('34000');
+  await page.locator('#saveSavingButton').click();
+  await page.locator('#savingSheet').waitFor({ state: 'hidden' });
+
+  await page.locator('#savingsMonthList .entry').filter({ hasText: `Remaining ${previous} salary` }).locator('.entry__menu').click();
+  await page.locator('#actionList .action__item').filter({ hasText: 'Delete savings' }).click();
+  await page.locator('#actionList .action__item').filter({ hasText: 'Delete savings' }).click();
+  await waitForToast(page, 'Savings entry deleted.');
+  await page.locator('#toastAction').click();
+  await waitForToast(page, 'Savings entry restored.');
+
+  await page.locator('[data-view="salary"]').click();
+  await page.locator('#salaryPrevMonth').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(1000));
+  await page.locator('#salaryTransferButton').click();
+  await waitForToast(page, 'moved to Savings.');
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
+  const finalSnapshot = await dbSnapshot(page);
+  const transfers = finalSnapshot.savings.filter(record => record.type === 'salary_balance_transfer');
+  assert.equal(transfers.length, 2);
+  assert.equal(transfers.reduce((sum, record) => sum + record.amountPaise, 0), 3500000);
+  await context.close();
+});
+
 await run('salary months stay independent and duplicate months are blocked', async () => {
   const context = await createContext();
   const page = await context.newPage();
@@ -716,8 +834,8 @@ await run('salary months stay independent and duplicate months are blocked', asy
 
   await page.locator('#salaryPrevMonth').click();
   assert.equal(await page.locator('#salaryMonthLabel').innerText(), formatMonth(previous));
-  assert.equal(await page.locator('#salaryAmount').innerText(), 'Not configured');
-  assert.match(await page.locator('#salaryStatus').innerText(), /No salary recorded/);
+  assert.equal(await page.locator('#salaryAmount').innerText(), 'No salary pool');
+  assert.match(await page.locator('#salaryStatus').innerText(), /No salary pool/);
   assert.equal(await page.locator('#salaryClearButton').isHidden(), true);
 
   await page.locator('#salaryEditButton').click();
@@ -728,6 +846,10 @@ await run('salary months stay independent and duplicate months are blocked', asy
   await waitForToast(page, 'Salary saved.');
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(45000));
   assert.equal(await page.locator('#salaryMonthLabel').innerText(), formatMonth(previous));
+  if (await page.locator('#actionSheet').isVisible()) {
+    await page.locator('#actionList .action__item').filter({ hasText: 'Not Now' }).click();
+    await page.locator('#actionSheet').waitFor({ state: 'hidden' });
+  }
 
   await page.locator('#salaryNextMonth').click();
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(50000));
@@ -755,7 +877,7 @@ await run('salary months stay independent and duplicate months are blocked', asy
   await page.locator('#salaryNextMonth').click();
   await page.locator('#salaryNextMonth').click();
   assert.equal((await page.locator('#salaryMonthHint').textContent()).trim(), 'Future month');
-  assert.equal(await page.locator('#salaryAmount').innerText(), 'Not configured');
+  assert.equal(await page.locator('#salaryAmount').innerText(), 'No salary pool');
 
   await context.close();
 });
@@ -780,7 +902,7 @@ await run('the salary month navigator jumps, returns to the current month and ne
   await addSaving(page, { amount: '3000', description: 'Emergency fund' });
 
   await page.locator('[data-view="salary"]').click();
-  assert.equal(await page.locator('#salarySplit .split__item--end strong').innerText(), formatMoney(45800));
+  assert.equal(await page.locator('#salarySplit .split__item').nth(0).locator('strong').textContent(), formatMoney(50000));
 
   // Opening the navigator from the current month and picking the previous one.
   await page.locator('#salaryMonthPickerButton').click();
@@ -794,8 +916,8 @@ await run('the salary month navigator jumps, returns to the current month and ne
 
   assert.equal(await page.locator('#salaryMonthLabel').innerText(), formatMonth(previous));
   assert.equal((await page.locator('#salaryMonthHint').textContent()).trim(), 'Past month');
-  assert.equal(await page.locator('#salaryAmount').innerText(), 'Not configured');
-  assert.equal(await page.locator('#salaryStatus').innerText().then(text => text.includes('No salary recorded')), true);
+  assert.equal(await page.locator('#salaryAmount').innerText(), 'No salary pool');
+  assert.equal(await page.locator('#salaryStatus').innerText().then(text => text.includes('No salary pool')), true);
   assert.equal(await page.locator('#salarySplit .split__item--end strong').innerText(), '—');
   assert.equal(await page.locator('#salaryNowRow').isVisible(), true, 'shortcut appears off the current month');
   assert.equal(await page.locator('#salaryList .entry').count(), 1, 'history still lists only the real record');
@@ -806,7 +928,7 @@ await run('the salary month navigator jumps, returns to the current month and ne
   await page.locator('#salaryNextMonth').click();
   assert.equal(await page.locator('#salaryMonthLabel').innerText(), formatMonth(future));
   assert.equal((await page.locator('#salaryMonthHint').textContent()).trim(), 'Future month');
-  assert.equal(await page.locator('#salaryAmount').innerText(), 'Not configured');
+  assert.equal(await page.locator('#salaryAmount').innerText(), 'No salary pool');
   assert.equal(await page.locator('#salaryEditButton').innerText(), 'Add salary');
 
   const untouched = await dbSnapshot(page);
@@ -818,8 +940,8 @@ await run('the salary month navigator jumps, returns to the current month and ne
   await page.locator('#salaryCurrentMonth').click();
   assert.equal(await page.locator('#salaryMonthLabel').innerText(), formatMonth(current));
   assert.equal(await page.locator('#salaryNowRow').isHidden(), true);
-  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(50000));
-  assert.equal(await page.locator('#salarySplit .split__item--end strong').innerText(), formatMoney(45800));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(45800));
+  assert.equal(await page.locator('#salarySplit .split__item--end strong').innerText(), formatMoney(1200));
 
   await context.close();
 });
@@ -830,6 +952,8 @@ await run('a sheet can be reopened while it is still closing', async () => {
   globalThis.__activePage = page;
   watch(page);
   await gotoApp(page);
+  await addSalary(page, { amount: '10000' });
+  await waitForToast(page, 'Salary saved.');
   await page.locator('[data-view="savings"]').click();
 
   for (const amount of ['1000', '2000']) {
@@ -867,7 +991,6 @@ await run('negative balances and months without salary are shown honestly', asyn
   watch(page);
   await gotoApp(page);
 
-  await addExpense(page, { amount: '2000', description: 'Unexpected repair' });
   assert.equal(await page.locator('#financeSalary').innerText(), 'Not set');
   assert.equal(await page.locator('#financeRemainingValue').innerText(), '—');
   assert.match(await page.locator('#financeRemainingNote').innerText(), /No salary recorded/);
@@ -878,6 +1001,7 @@ await run('negative balances and months without salary are shown honestly', asyn
 
   await addSalary(page, { amount: '1000' });
   await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '2000', description: 'Unexpected repair' });
   assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(-1000));
   assert.equal(
     await page.locator('#financeBalance').evaluate(element => element.classList.contains('is-negative')),
@@ -894,6 +1018,8 @@ await run('savings history spans months and stays out of expenses', async () => 
   globalThis.__activePage = page;
   watch(page);
   await gotoApp(page);
+  await addSalary(page, { amount: '10000' });
+  await waitForToast(page, 'Salary saved.');
   const current = monthKeyNow();
   const previous = shiftMonthKey(current, -1);
 
@@ -1019,6 +1145,83 @@ await run('an existing version 1 database upgrades without losing expenses', asy
   await context.close();
 });
 
+await run('legacy v2 transactions allocate by entry timestamp and unmatched rows stay reviewable', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  await page.goto(`${base}/__blank__`, { waitUntil: 'load' });
+  watch(page);
+  await page.evaluate(async () => {
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase('spendly');
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => resolve();
+    });
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.open('spendly', 2);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        const expenses = db.createObjectStore('expenses', { keyPath: 'id' });
+        expenses.createIndex('by_date', 'date', { unique: false });
+        expenses.createIndex('by_createdAt', 'createdAt', { unique: false });
+        expenses.createIndex('by_date_createdAt', ['date', 'createdAt'], { unique: false });
+        db.createObjectStore('meta', { keyPath: 'key' });
+        const salaries = db.createObjectStore('salaries', { keyPath: 'id' });
+        salaries.createIndex('by_monthKey', 'monthKey', { unique: true });
+        salaries.createIndex('by_createdAt', 'createdAt', { unique: false });
+        const savings = db.createObjectStore('savings', { keyPath: 'id' });
+        savings.createIndex('by_monthKey', 'monthKey', { unique: false });
+        savings.createIndex('by_date', 'date', { unique: false });
+        savings.createIndex('by_date_createdAt', ['date', 'createdAt'], { unique: false });
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const transaction = db.transaction(['expenses', 'salaries', 'savings'], 'readwrite');
+        const expenses = transaction.objectStore('expenses');
+        const salaries = transaction.objectStore('salaries');
+        const savings = transaction.objectStore('savings');
+        salaries.put({ id: 'salary-oct', monthKey: '2026-10', amount: 50000, amountPaise: 5000000, notes: '', createdAt: '2026-10-01T08:00:00.000Z', updatedAt: '2026-10-01T08:00:00.000Z' });
+        salaries.put({ id: 'salary-nov', monthKey: '2026-11', amount: 40000, amountPaise: 4000000, notes: '', createdAt: '2026-11-01T08:00:00.000Z', updatedAt: '2026-11-01T08:00:00.000Z' });
+        expenses.put({ id: 'legacy-oct-pool', amount: 500, description: 'November date, October pool', date: '2026-11-05', createdAt: '2026-10-25T08:00:00.000Z', updatedAt: '2026-10-25T08:00:00.000Z' });
+        expenses.put({ id: 'legacy-unmatched-expense', amount: 50, description: 'No salary existed yet', date: '2026-09-02', createdAt: '2026-09-01T08:00:00.000Z', updatedAt: '2026-09-01T08:00:00.000Z' });
+        savings.put({ id: 'legacy-nov-saving', monthKey: '2026-11', amount: 200, amountPaise: 20000, date: '2026-11-03', description: 'November contribution', createdAt: '2026-11-02T08:00:00.000Z', updatedAt: '2026-11-02T08:00:00.000Z' });
+        savings.put({ id: 'legacy-unmatched-saving', monthKey: '2026-09', amount: 300, amountPaise: 30000, date: '2026-09-03', description: 'Unmatched contribution', createdAt: '2026-09-01T08:00:00.000Z', updatedAt: '2026-09-01T08:00:00.000Z' });
+        transaction.oncomplete = () => { db.close(); resolve(); };
+        transaction.onerror = () => reject(transaction.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+
+  await gotoApp(page);
+  const migrated = await dbSnapshot(page);
+  const octoberExpense = migrated.records.find(record => record.id === 'legacy-oct-pool');
+  const unresolvedExpense = migrated.records.find(record => record.id === 'legacy-unmatched-expense');
+  const novemberSaving = migrated.savings.find(record => record.id === 'legacy-nov-saving');
+  const unresolvedSaving = migrated.savings.find(record => record.id === 'legacy-unmatched-saving');
+  assert.equal(octoberExpense.salaryRecordId, 'salary-oct', 'entry time, not its November expense date, selects October');
+  assert.equal(octoberExpense.date, '2026-11-05', 'migration preserves the actual expense date');
+  assert.equal(octoberExpense.paymentSource, 'salary');
+  assert.equal(unresolvedExpense.allocationStatus, 'needs_review');
+  assert.equal(novemberSaving.salaryRecordId, 'salary-nov');
+  assert.equal(unresolvedSaving.allocationStatus, 'needs_review');
+  const marker = migrated.meta.find(record => record.key === 'migration:salary-allocation:v1');
+  assert.deepEqual(marker.unresolvedExpenseIds, ['legacy-unmatched-expense']);
+  assert.deepEqual(marker.unresolvedSavingIds, ['legacy-unmatched-saving']);
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(39800));
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  const reloaded = await dbSnapshot(page);
+  assert.equal(reloaded.records.length, 2, 'migration does not duplicate expense rows');
+  assert.equal(reloaded.records.find(record => record.id === 'legacy-oct-pool').salaryRecordId, 'salary-oct');
+  assert.equal(reloaded.savings.length, 2, 'migration does not duplicate savings rows');
+  assert.equal(reloaded.savings.find(record => record.id === 'legacy-nov-saving').salaryRecordId, 'salary-nov');
+
+  await context.close();
+});
+
 await run('salary and savings can be added and read with no network', async () => {
   const context = await createContext();
   const page = await context.newPage();
@@ -1041,7 +1244,7 @@ await run('salary and savings can be added and read with no network', async () =
   assert.equal(await page.locator('#offlineBanner').isVisible(), true);
 
   await page.locator('[data-view="salary"]').click();
-  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(50000));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(49000));
   await page.locator('[data-view="savings"]').click();
   assert.equal(await page.locator('#savingsMonthTotal').innerText(), formatMoney(1000));
   await page.locator('[data-view="dashboard"]').click();

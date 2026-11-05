@@ -288,3 +288,22 @@ One assertion expected ₹47,500 after a reload, but the savings entry had been 
 - `npm test` → **54 passed, 0 failed**.
 - `npm run test:e2e` → **15/15 checks passed**, no console errors.
 - Manual: navigator opens on November 2026; picker to October 2026 shows **Past month**, **Not configured**, `—`, zero expenses/savings; **Current month** restores ₹50,000 with ₹40,800 remaining; dock visible at 390 × 844 with no overlap.
+
+## 9. Version 3.2.0 — 6 November 2026 — Salary pools and source-aware ledger
+
+**Why:** month-based accounting incorrectly tied transactions to their calendar month, although a salary remains the available pool until a newer salary is manually recorded. Savings also needed to be spendable without misreporting withdrawals as contributions or double-counting expenses.
+
+### Implemented
+
+1. Salary is now a distinct pool. New salary-funded expenses and savings contributions reference the latest created salary record, regardless of the transaction's calendar date. Historical salary pools retain their own calculations.
+2. Salary's primary amount is its remaining balance. The selected month still selects a salary record, and an absent record has a clear empty state.
+3. The user may explicitly transfer a previous salary pool's positive remainder into Savings. Transfers are typed credits and debits from the originating pool; deferred balances remain transferable later.
+4. Expenses include a Paid From choice for Salary Balance or Savings. A savings-funded expense and its unique linked withdrawal are created, edited, removed and restored atomically. Insufficient Savings blocks the write.
+5. The Savings view distinguishes contributions, salary transfers and withdrawals. CSV remains expenses-only, and dashboard expense analytics continue to use actual dates for either funding source.
+6. IndexedDB v3 adds relationship indexes without clearing records. A one-time idempotent migration assigns legacy rows by timestamp; rows without a safe match are retained for review. JSON backup format is v4.
+7. `FinancialLedgerRepository` centralizes multi-store integrity operations; derived balances continue to use integer paise and are not separately persisted.
+8. Added coverage for pool math, migration-sensitive financial workflows, insufficient balances, transfer handling, edits/deletes/Undo and browser layout. The v2 fixture verifies entry-time allocation, preserved dates, unmatched-row review flags and idempotency after reload. Latest run: 56 unit tests and 17 browser scenarios passed.
+
+**Decision:** use entry timestamps for legacy assignment. Each legacy row goes to the most recently created salary at or before `createdAt`; transaction date is retained but does not decide funding. Unmatched records remain unallocated with `needs_review` status.
+
+**Docs:** `context/architecture.md`, `context/data-model.md`, `context/design-system.md`, `context/testing.md`, `context/roadmap.md` and README contain the current model, migration and deployment steps.

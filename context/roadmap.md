@@ -42,3 +42,11 @@ Deliberately absent: auth, cloud sync, income sources other than salary, budgeti
 ## How to add to this file
 
 Append a dated subsection under the right horizon. State the user problem, the smallest shape that solves it, and what it must not break (offline, data safety, expense-only CSV). If an item above is implemented, leave the line and add an entry in `memory.md` linking the version that shipped it.
+
+## Addendum — 6 November 2026: completed salary-pool and expense-source upgrade
+
+Implemented the source-aware salary/savings ledger in Spendly 3.2. Salary records are independent pools keyed by salary record ID; expense dates continue to drive dashboard analytics and savings month grouping. The current active pool is the most recently created salary. New salary-funded expenses and contributions debit that pool, while Savings-funded expenses create linked withdrawals.
+
+The project now supports explicit later transfer of a previous pool's positive remainder into Savings. Transfer and withdrawal rows remain distinct from ordinary contributions and expenses. Salary deletion is blocked while linked activity exists. No automatic carry-forward or split payment was added.
+
+The upgrade keeps IndexedDB local and offline, uses additive v3 indexes, migrates legacy allocation using transaction timestamps, flags ambiguous rows for review, and writes backup v4. The corresponding candidate was not on the roadmap, so this addendum records the shipped scope without removing future items.

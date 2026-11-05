@@ -422,11 +422,20 @@
             </button>
           </div>
 
+          <p class="income-card__balance-label" id="salaryBalanceLabel">Remaining balance</p>
           <p class="income-card__amount" id="salaryAmount">₹0.00</p>
           <p class="income-card__notes" id="salaryNotes" hidden></p>
           <p class="income-card__status" id="salaryStatus">No salary recorded for this month.</p>
 
           <div class="income-card__split" id="salarySplit" aria-live="polite"></div>
+
+          <div class="salary-transfer" id="salaryTransferPrompt" hidden>
+            <p id="salaryTransferMessage"></p>
+            <div class="salary-transfer__actions">
+              <button class="button button--primary" type="button" id="salaryTransferButton">Move to Savings</button>
+              <button class="button button--quiet" type="button" id="salaryTransferLater">Not Now</button>
+            </div>
+          </div>
 
           <div class="income-card__actions">
             <button class="button button--primary button--block" type="button" id="salaryEditButton">Add salary</button>
@@ -467,6 +476,11 @@
             <p class="savings-hero__label">Saved in <span id="savingsMonthLabel">November 2026</span></p>
             <p class="savings-hero__amount" id="savingsMonthTotal">₹0.00</p>
             <p class="savings-hero__meta" id="savingsMonthMeta">No entries yet</p>
+            <div class="savings-breakdown" aria-label="This month savings activity">
+              <span>Contributions <strong id="savingsMonthContributions">₹0.00</strong></span>
+              <span>Transfers <strong id="savingsMonthTransfers">₹0.00</strong></span>
+              <span>Withdrawals <strong id="savingsMonthWithdrawals">₹0.00</strong></span>
+            </div>
             <div class="savings-hero__actions">
               <button class="button button--primary" type="button" id="addSavingButton">
                 <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
@@ -489,6 +503,11 @@
             <p class="savings-hero__label">Total accumulated savings</p>
             <p class="savings-hero__amount" id="savingsTotalAmount">₹0.00</p>
             <p class="savings-hero__meta" id="savingsMonthsCount">Across 0 months</p>
+            <div class="savings-breakdown" aria-label="Total savings activity">
+              <span>Contributions <strong id="savingsTotalContributions">₹0.00</strong></span>
+              <span>Transfers <strong id="savingsTotalTransfers">₹0.00</strong></span>
+              <span>Withdrawals <strong id="savingsTotalWithdrawals">₹0.00</strong></span>
+            </div>
             <div class="savings-growth" id="savingsGrowthCard">
               <span class="savings-growth__icon" aria-hidden="true"><svg class="icon"><use href="#i-trend"></use></svg></span>
               <span class="savings-growth__value" id="savingsGrowth">+₹0.00</span>
@@ -607,6 +626,19 @@
           </div>
           <p class="field__error" id="dateError" hidden></p>
         </div>
+
+        <fieldset class="field paid-from" id="paidFromField">
+          <legend>Paid From</legend>
+          <label class="source-option" for="paidFromSalary">
+            <input id="paidFromSalary" type="radio" name="paymentSource" value="salary" checked>
+            <span class="source-option__copy"><strong>Salary Balance</strong><small id="salaryAvailableLabel">₹0.00 available</small></span>
+          </label>
+          <label class="source-option" for="paidFromSavings">
+            <input id="paidFromSavings" type="radio" name="paymentSource" value="savings">
+            <span class="source-option__copy"><strong>Savings</strong><small id="savingsAvailableLabel">₹0.00 available</small></span>
+          </label>
+          <p class="field__error" id="paymentSourceError" hidden></p>
+        </fieldset>
 
         <button class="button button--primary button--block" type="submit" id="saveButton">Save expense</button>
         <p class="form-note">

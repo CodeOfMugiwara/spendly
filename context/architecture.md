@@ -127,3 +127,16 @@ The Salary page now owns a complete month navigator instead of only a stepper.
 Two guards now exist:
 1. `openDialog(dialog)` clears the pending timer, and if the dialog is still open mid-close it calls `close()` before `showModal()` so the open animation restarts from a clean state.
 2. Each open stamps `dialog.dataset.session`. Submit handlers capture that value and only call the close helper when `isSameDialogSession()` still matches, so a save never closes a sheet the user reopened with a new entry.
+
+## Addendum — 6 November 2026: salary pools and source-aware expense ledger
+
+Spendly 3.2 changes the financial allocation rule while retaining the four-view app and the one-way `app → repository → db` boundary. Salary month selection remains a view concern; payment allocation is now a stable relationship to a salary record.
+
+- `computeSalaryPool()` derives one pool from its salary, salary-funded expenses, contributions and outgoing balance transfers. `computeSavingsBalance()` derives Savings from typed credits and expense withdrawals. Both use integer paise.
+- `FinancialLedgerRepository` owns atomic multi-store writes for expenses and their savings withdrawals, balance transfers, salary deletion guards, and full collection replacement. The UI calls these repository methods rather than coordinating writes between stores itself.
+- `paymentSource` and `salaryRecordId` on expenses preserve the original funding source when transaction dates differ from salary months. Savings-funded expenses have one linked `withdrawal` keyed by the unique sparse `by_expenseId` index.
+- Salary contribution and transfer records retain `salaryRecordId`, so recomputation and Undo can return money to the correct pool. A salary with any linked ledger activity cannot be deleted.
+- A one-time IndexedDB transaction assigns legacy financial rows to the latest salary whose `createdAt` is no later than the transaction timestamp. It preserves original transaction dates and identifiers. Records with no safe match remain unallocated and are marked for review.
+- Backup restore validates relations and replaces provided collections in a single transaction; optional collections absent from old backups remain untouched. Backup format is v4; IndexedDB schema is v3.
+
+The previous month-only formula in the 3.0/3.1 history is superseded for salary balances. Dashboard expense analytics and Savings month tabs remain calendar-date based.

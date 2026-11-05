@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 
 import {
   computeMonthlyFinance,
+  computeSalaryPool,
+  computeSavingsBalance,
   currentMonthKey,
   findSalaryForMonth,
+  findActiveSalary,
   formatMonthKey,
   fromPaise,
   groupSavingsByMonth,
@@ -322,4 +325,33 @@ test('savings are grouped by month with exact totals', () => {
   assert.equal(groups[0].count, 2);
   assert.equal(groups[1].total, 500.7);
   assert.equal(groups[2].total, 300);
+});
+
+test('salary pools follow explicit allocation links rather than transaction calendar months', () => {
+  const october = { ...salary('2026-10', 50000), id: 'salary-oct', createdAt: '2026-10-01T08:00:00.000Z' };
+  const november = { ...salary('2026-11', 40000), id: 'salary-nov', createdAt: '2026-11-25T08:00:00.000Z' };
+  const expenses = [
+    { id: 'e1', amount: 5000, date: '2026-11-05', paymentSource: 'salary', salaryRecordId: 'salary-oct' },
+    { id: 'e2', amount: 3000, date: '2026-11-26', paymentSource: 'salary', salaryRecordId: 'salary-nov' },
+    { id: 'e3', amount: 9000, date: '2026-11-27', paymentSource: 'savings', salaryRecordId: null }
+  ];
+  const savings = [
+    { id: 's1', amount: 10000, type: 'contribution', salaryRecordId: 'salary-oct', date: '2026-11-10' },
+    { id: 's2', amount: 2000, type: 'salary_balance_transfer', salaryRecordId: 'salary-oct', date: '2026-11-25' }
+  ];
+  assert.equal(computeSalaryPool(october, expenses, savings).remaining, 33000);
+  assert.equal(computeSalaryPool(november, expenses, savings).remaining, 37000);
+  assert.equal(findActiveSalary([october, november]), november);
+});
+
+test('savings balance counts contributions and transfers as credits and withdrawals as debits', () => {
+  const result = computeSavingsBalance([
+    { amount: 10000, type: 'contribution' },
+    { amount: 2000, type: 'salary_balance_transfer' },
+    { amount: 3000, type: 'withdrawal' }
+  ]);
+  assert.equal(result.balancePaise, toPaise(9000));
+  assert.equal(result.contributionTotal, 10000);
+  assert.equal(result.transferTotal, 2000);
+  assert.equal(result.withdrawalTotal, 3000);
 });

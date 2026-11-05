@@ -8,6 +8,10 @@
 
 import {
   STORAGE_KEY,
+  computeSalaryPool,
+  computeSavingsBalance,
+  findActiveSalary,
+  localToday,
   isMonthKey,
   normalizeExpenseRecord,
   normalizeSalaryRecord,
@@ -44,6 +48,35 @@ export class DuplicateMonthError extends Error {
     super('That month already has a salary. Edit it instead of adding a second one.');
     this.name = 'DuplicateMonthError';
     this.monthKey = monthKey;
+  }
+}
+
+export class InsufficientSavingsError extends Error {
+  constructor(availablePaise) {
+    super('Insufficient savings balance. Lower the amount or choose Salary Balance.');
+    this.name = 'InsufficientSavingsError';
+    this.availablePaise = availablePaise;
+  }
+}
+
+export class NoActiveSalaryError extends Error {
+  constructor() {
+    super('Add a salary before using Salary Balance or recording a salary-funded savings contribution.');
+    this.name = 'NoActiveSalaryError';
+  }
+}
+
+export class ReferencedSalaryError extends Error {
+  constructor() {
+    super('This salary still has allocated expenses or savings. Keep it so the financial history stays accurate.');
+    this.name = 'ReferencedSalaryError';
+  }
+}
+
+export class InsufficientSalaryBalanceError extends Error {
+  constructor() {
+    super('The salary pool no longer has enough remaining balance for this transfer.');
+    this.name = 'InsufficientSalaryBalanceError';
   }
 }
 
@@ -324,7 +357,12 @@ export class SalaryRepository {
     const existing = await this.getByMonth(checked.value.monthKey);
     if (existing) throw new DuplicateMonthError(checked.value.monthKey);
 
-    const timestamp = this.now().toISOString();
+    const now = this.now();
+    const latestCreatedAt = (await this.store.getAll()).reduce((latest, record) => {
+      const value = Date.parse(record.createdAt ?? '');
+      return Number.isFinite(value) ? Math.max(latest, value) : latest;
+    }, -Infinity);
+    const timestamp = new Date(Math.max(now.getTime(), Number.isFinite(latestCreatedAt) ? latestCreatedAt + 1 : now.getTime())).toISOString();
     const record = {
       id: this.makeId(),
       ...checked.value,
@@ -524,5 +562,424 @@ export class SavingsRepository {
 
   close() {
     this.store.close?.();
+  }
+}
+
+const ALLOCATION_MIGRATION_KEY = 'migration:salary-allocation:v1';
+const FINANCIAL_STORES = ['expenses', 'salaries', 'savings', 'meta'];
+
+/**
+ * Multi-store ledger operations. Related expense/withdrawal changes use one
+ * IndexedDB transaction so a failure cannot leave only half a money movement.
+ */
+export class FinancialLedgerRepository {
+  constructor(db, options = {}) {
+    if (!db) throw new Error('A database connection is required.');
+    this.db = db;
+    this.now = options.now ?? (() => new Date());
+    this.makeId = options.makeId ?? defaultMakeId;
+  }
+
+  #transaction(stores, mode, operation) {
+    return new Promise((resolve, reject) => {
+      let transaction;
+      let result;
+      let failure = null;
+      try {
+        transaction = this.db.transaction(stores, mode);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
+      transaction.oncomplete = () => resolve(result);
+      transaction.onerror = () => reject(failure ?? transaction.error ?? new Error('Financial transaction failed.'));
+      transaction.onabort = () => reject(failure ?? transaction.error ?? new Error('Financial transaction was cancelled.'));
+
+      const collections = Object.fromEntries(stores.map(name => [name, transaction.objectStore(name)]));
+      const snapshots = {};
+      let pending = stores.length;
+      for (const name of stores) {
+        const request = collections[name].getAll();
+        request.onsuccess = () => {
+          snapshots[name] = request.result;
+          pending -= 1;
+          if (pending !== 0) return;
+          try {
+            result = operation({ transaction, collections, snapshots });
+          } catch (error) {
+            failure = error;
+            try { transaction.abort(); } catch { /* already completed */ }
+          }
+        };
+        request.onerror = () => {
+          failure = request.error ?? new Error('Could not read financial records.');
+          try { transaction.abort(); } catch { /* already completed */ }
+        };
+      }
+    });
+  }
+
+  /** Idempotent timestamp-based v2 migration; ambiguous records stay reviewable. */
+  migrateAllocations() {
+    return this.#transaction(FINANCIAL_STORES, 'readwrite', ({ collections, snapshots }) => {
+      const existing = snapshots.meta.find(record => record.key === ALLOCATION_MIGRATION_KEY);
+      if (existing) return { status: 'already-migrated', ...existing };
+
+      const salaries = snapshots.salaries;
+      const assignSalary = createdAt => {
+        const transactionTime = Date.parse(createdAt ?? '');
+        if (!Number.isFinite(transactionTime)) return null;
+        return salaries
+          .filter(salary => {
+            const salaryTime = Date.parse(salary.createdAt ?? '');
+            return Number.isFinite(salaryTime) && salaryTime <= transactionTime;
+          })
+          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || String(b.id).localeCompare(String(a.id)))[0] ?? null;
+      };
+
+      const expenses = snapshots.expenses.map(expense => {
+        if (expense.salaryRecordId || expense.paymentSource === 'savings') return expense;
+        const salary = assignSalary(expense.createdAt);
+        const updated = {
+          ...expense,
+          paymentSource: 'salary',
+          salaryRecordId: salary?.id ?? null,
+          ...(salary ? { allocationStatus: undefined } : { allocationStatus: 'needs_review' })
+        };
+        if (updated.allocationStatus === undefined) delete updated.allocationStatus;
+        collections.expenses.put(updated);
+        return updated;
+      });
+
+      const savings = snapshots.savings.map(record => {
+        if (record.type) return record;
+        const salary = assignSalary(record.createdAt);
+        const updated = {
+          ...record,
+          type: 'contribution',
+          ...(salary ? { salaryRecordId: salary.id } : { allocationStatus: 'needs_review' })
+        };
+        collections.savings.put(updated);
+        return updated;
+      });
+
+      const unresolvedExpenseIds = expenses.filter(record => record.paymentSource === 'salary' && !record.salaryRecordId).map(record => record.id);
+      const unresolvedSavingIds = savings.filter(record => record.type === 'contribution' && !record.salaryRecordId).map(record => record.id);
+      const marker = {
+        key: ALLOCATION_MIGRATION_KEY,
+        version: 1,
+        mode: 'createdAt-active-salary',
+        migratedAt: this.now().toISOString(),
+        unresolvedExpenseIds,
+        unresolvedSavingIds
+      };
+      collections.meta.put(marker);
+      return { status: 'migrated', ...marker };
+    });
+  }
+
+  /** Atomically replace the supplied collections and validate their links. */
+  replaceCollections(data) {
+    return this.#transaction(FINANCIAL_STORES, 'readwrite', ({ collections, snapshots }) => {
+      const salaries = Array.isArray(data.salaries) ? data.salaries : snapshots.salaries;
+      const salaryIds = new Set(salaries.map(record => record.id));
+      const assignSalary = createdAt => {
+        const transactionTime = Date.parse(createdAt ?? '');
+        if (!Number.isFinite(transactionTime)) return null;
+        return salaries.filter(record => {
+          const salaryTime = Date.parse(record.createdAt ?? '');
+          return Number.isFinite(salaryTime) && salaryTime <= transactionTime;
+        }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || String(b.id).localeCompare(String(a.id)))[0] ?? null;
+      };
+      const expenses = Array.isArray(data.expenses) ? data.expenses : snapshots.expenses;
+      const savings = Array.isArray(data.savings) ? data.savings : snapshots.savings;
+      const preparedExpenses = expenses.map(record => {
+        if (record.paymentSource) return record;
+        const previous = snapshots.expenses.find(item => item.id === record.id);
+        if (previous?.paymentSource && previous.date === record.date && Number(previous.amount) === Number(record.amount) && previous.description === record.description) {
+          return { ...record, paymentSource: previous.paymentSource, salaryRecordId: previous.salaryRecordId ?? null, ...(previous.allocationStatus ? { allocationStatus: previous.allocationStatus } : {}) };
+        }
+        const salary = assignSalary(record.createdAt);
+        return {
+          ...record, paymentSource: 'salary', salaryRecordId: salary?.id ?? null,
+          ...(salary ? {} : { allocationStatus: 'needs_review' })
+        };
+      });
+      let preparedSavings = savings.map(record => {
+        if (record.type) return record;
+        const previous = snapshots.savings.find(item => item.id === record.id);
+        if (previous?.type && previous.date === record.date && Number(previous.amount) === Number(record.amount) && previous.description === record.description) return previous;
+        const salary = assignSalary(record.createdAt);
+        return {
+          ...record, type: 'contribution', ...(salary ? { salaryRecordId: salary.id } : { allocationStatus: 'needs_review' })
+        };
+      });
+
+      if (!Array.isArray(data.savings) && Array.isArray(data.expenses)) {
+        const retainedExpenseIds = new Set(preparedExpenses.map(record => record.id));
+        preparedSavings = preparedSavings.filter(record => record.type !== 'withdrawal' || retainedExpenseIds.has(record.expenseId));
+      }
+
+      const expenseById = new Map(preparedExpenses.map(record => [record.id, record]));
+      const withdrawalByExpense = new Map();
+      for (const record of preparedSavings) {
+        if (record.salaryRecordId && !salaryIds.has(record.salaryRecordId)) {
+          throw new ValidationError({ backup: 'A savings record refers to a salary that is missing from this backup.' });
+        }
+        if (record.type === 'withdrawal') {
+          const expense = expenseById.get(record.expenseId);
+          if (!expense || expense.paymentSource !== 'savings' || Math.round(expense.amount * 100) !== Math.round(record.amount * 100)) {
+            throw new ValidationError({ backup: 'A savings withdrawal does not match its linked expense.' });
+          }
+          if (withdrawalByExpense.has(record.expenseId)) throw new ValidationError({ backup: 'An expense has duplicate savings withdrawals.' });
+          withdrawalByExpense.set(record.expenseId, record);
+        }
+      }
+      for (const record of preparedExpenses) {
+        if (record.salaryRecordId && !salaryIds.has(record.salaryRecordId)) {
+          throw new ValidationError({ backup: 'An expense refers to a salary that is missing from this backup.' });
+        }
+        if (record.paymentSource === 'savings' && !withdrawalByExpense.has(record.id)) {
+          throw new ValidationError({ backup: 'A savings-funded expense is missing its withdrawal record.' });
+        }
+      }
+      if (computeSavingsBalance(preparedSavings).balancePaise < 0) {
+        throw new ValidationError({ backup: 'This backup would make the savings balance negative.' });
+      }
+
+      if (Array.isArray(data.expenses)) {
+        collections.expenses.clear();
+        for (const record of preparedExpenses) collections.expenses.put(record);
+      }
+      if (Array.isArray(data.salaries)) {
+        collections.salaries.clear();
+        for (const record of salaries) collections.salaries.put(record);
+      }
+      if (Array.isArray(data.savings) || (Array.isArray(data.expenses) && preparedSavings.length !== snapshots.savings.length)) {
+        collections.savings.clear();
+        for (const record of preparedSavings) collections.savings.put(record);
+      }
+
+      const unresolvedExpenseIds = preparedExpenses.filter(record => record.allocationStatus === 'needs_review').map(record => record.id);
+      const unresolvedSavingIds = preparedSavings.filter(record => record.allocationStatus === 'needs_review').map(record => record.id);
+      collections.meta.put({
+        key: ALLOCATION_MIGRATION_KEY, version: 1, mode: 'createdAt-active-salary',
+        migratedAt: this.now().toISOString(), unresolvedExpenseIds, unresolvedSavingIds
+      });
+      return { expenseCount: preparedExpenses.length, salaryCount: salaries.length, savingsCount: preparedSavings.length };
+    });
+  }
+
+  /** Add a salary-funded or savings-funded expense with the current allocation. */
+  createExpense(input) {
+    const checked = validateExpenseInput(input);
+    if (!checked.ok) throw new ValidationError(checked.errors);
+    const paymentSource = input.paymentSource === 'savings' ? 'savings' : 'salary';
+    const timestamp = this.now().toISOString();
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const activeSalary = findActiveSalary(snapshots.salaries);
+      if (paymentSource === 'salary' && !activeSalary) throw new NoActiveSalaryError();
+      const expense = {
+        id: this.makeId(), ...checked.value,
+        paymentSource,
+        salaryRecordId: paymentSource === 'salary' ? activeSalary.id : null,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      if (paymentSource === 'savings') {
+        const amountPaise = Math.round(expense.amount * 100);
+        const balance = computeSavingsBalance(snapshots.savings);
+        if (balance.balancePaise < amountPaise) throw new InsufficientSavingsError(balance.balancePaise);
+        collections.savings.add({
+          id: this.makeId(), monthKey: expense.date.slice(0, 7), amount: expense.amount, amountPaise,
+          date: expense.date, description: expense.description, type: 'withdrawal', expenseId: expense.id,
+          createdAt: timestamp, updatedAt: timestamp
+        });
+      }
+      collections.expenses.add(expense);
+      return expense;
+    });
+  }
+
+  updateExpense(id, input) {
+    const checked = validateExpenseInput(input);
+    if (!checked.ok) throw new ValidationError(checked.errors);
+    const timestamp = this.now().toISOString();
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const existing = snapshots.expenses.find(record => record.id === id);
+      if (!existing) throw new NotFoundError(id);
+      const source = input.paymentSource === 'savings' ? 'savings' : 'salary';
+      const withdrawal = snapshots.savings.find(record => record.type === 'withdrawal' && record.expenseId === id);
+      const activeSalary = findActiveSalary(snapshots.salaries);
+      if (source === 'salary' && existing.paymentSource !== 'savings' && !existing.salaryRecordId) {
+        // Preserve unresolved legacy allocations instead of silently reassigning.
+      } else if (source === 'salary' && existing.paymentSource === 'savings' && !activeSalary) {
+        throw new NoActiveSalaryError();
+      }
+
+      const salaryRecordId = source === 'savings'
+        ? null
+        : (existing.paymentSource === 'savings' ? activeSalary?.id ?? null : existing.salaryRecordId);
+      const expense = {
+        ...existing, ...checked.value, paymentSource: source, salaryRecordId,
+        ...(salaryRecordId ? { allocationStatus: undefined } : {}),
+        id: existing.id, createdAt: existing.createdAt, updatedAt: timestamp
+      };
+      if (expense.allocationStatus === undefined) delete expense.allocationStatus;
+
+      if (source === 'savings') {
+        const balance = computeSavingsBalance(snapshots.savings);
+        const available = balance.balancePaise + (withdrawal ? Math.round(Number(withdrawal.amount) * 100) : 0);
+        const newAmountPaise = Math.round(expense.amount * 100);
+        if (available < newAmountPaise) throw new InsufficientSavingsError(available);
+        const newWithdrawal = {
+          id: withdrawal?.id ?? this.makeId(), monthKey: expense.date.slice(0, 7), amount: expense.amount,
+          amountPaise: newAmountPaise, date: expense.date, description: expense.description,
+          type: 'withdrawal', expenseId: expense.id, createdAt: withdrawal?.createdAt ?? timestamp, updatedAt: timestamp
+        };
+        collections.savings.put(newWithdrawal);
+      } else if (withdrawal) {
+        collections.savings.delete(withdrawal.id);
+      }
+      collections.expenses.put(expense);
+      return expense;
+    });
+  }
+
+  removeExpense(id) {
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const expense = snapshots.expenses.find(record => record.id === id);
+      if (!expense) throw new NotFoundError(id);
+      collections.expenses.delete(id);
+      for (const record of snapshots.savings) {
+        if (record.type === 'withdrawal' && record.expenseId === id) collections.savings.delete(record.id);
+      }
+      return expense;
+    });
+  }
+
+  restoreExpense(raw) {
+    const checked = normalizeExpenseRecord(raw, { now: this.now, makeId: this.makeId });
+    if (!checked.ok) throw new ValidationError(checked.errors, 'That expense could not be restored.');
+    const expense = checked.value;
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      if (snapshots.expenses.some(record => record.id === expense.id)) return expense;
+      if (expense.paymentSource === 'savings') {
+        const amountPaise = Math.round(expense.amount * 100);
+        const balance = computeSavingsBalance(snapshots.savings);
+        if (balance.balancePaise < amountPaise) throw new InsufficientSavingsError(balance.balancePaise);
+        collections.savings.add({
+          id: this.makeId(), monthKey: expense.date.slice(0, 7), amount: expense.amount, amountPaise,
+          date: expense.date, description: expense.description, type: 'withdrawal', expenseId: expense.id,
+          createdAt: expense.createdAt, updatedAt: expense.updatedAt
+        });
+      }
+      collections.expenses.add(expense);
+      return expense;
+    });
+  }
+
+  createContribution(input) {
+    const now = this.now();
+    const checked = validateSavingInput(input, now);
+    if (!checked.ok) throw new ValidationError(checked.errors, 'These savings details are not valid.');
+    const timestamp = now.toISOString();
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const activeSalary = findActiveSalary(snapshots.salaries);
+      if (!activeSalary) throw new NoActiveSalaryError();
+      const record = {
+        id: this.makeId(), ...checked.value, type: 'contribution', salaryRecordId: activeSalary.id,
+        createdAt: timestamp, updatedAt: timestamp
+      };
+      collections.savings.add(record);
+      return record;
+    });
+  }
+
+  updateSaving(id, input) {
+    const now = this.now();
+    const checked = validateSavingInput(input, now);
+    if (!checked.ok) throw new ValidationError(checked.errors, 'These savings details are not valid.');
+    const timestamp = now.toISOString();
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const existing = snapshots.savings.find(record => record.id === id);
+      if (!existing) throw new NotFoundError(id, 'That savings entry no longer exists.');
+      if (existing.type === 'withdrawal') throw new ValidationError({ record: 'Edit this withdrawal from its linked expense.' });
+      const record = { ...existing, ...checked.value, id, type: existing.type ?? 'contribution', createdAt: existing.createdAt, updatedAt: timestamp };
+      const savingsBalance = computeSavingsBalance(snapshots.savings);
+      const oldAmountPaise = Math.round(Number(existing.amount) * 100);
+      const newAmountPaise = Math.round(Number(record.amount) * 100);
+      if (savingsBalance.balancePaise - oldAmountPaise + newAmountPaise < 0) {
+        throw new InsufficientSavingsError(savingsBalance.balancePaise - oldAmountPaise);
+      }
+      if (record.type === 'salary_balance_transfer') {
+        const salary = snapshots.salaries.find(item => item.id === existing.salaryRecordId);
+        if (salary) {
+          const available = computeSalaryPool(salary, snapshots.expenses, snapshots.savings).remainingPaise + oldAmountPaise;
+          if (newAmountPaise > available) throw new InsufficientSalaryBalanceError();
+        }
+      }
+      collections.savings.put(record);
+      return record;
+    });
+  }
+
+  removeSaving(id) {
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const record = snapshots.savings.find(item => item.id === id);
+      if (!record) throw new NotFoundError(id, 'That savings entry no longer exists.');
+      if (record.type === 'withdrawal') throw new ValidationError({ record: 'Remove this withdrawal by editing or deleting its linked expense.' });
+      const balance = computeSavingsBalance(snapshots.savings);
+      if (record.type !== 'withdrawal' && balance.balancePaise - Math.round(Number(record.amount) * 100) < 0) {
+        throw new InsufficientSavingsError(balance.balancePaise - Math.round(Number(record.amount) * 100));
+      }
+      collections.savings.delete(id);
+      return record;
+    });
+  }
+
+  restoreSaving(raw) {
+    const checked = normalizeSavingRecord(raw, { now: this.now, makeId: this.makeId });
+    if (!checked.ok) throw new ValidationError(checked.errors, 'That savings entry could not be restored.');
+    const record = checked.value;
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      if (snapshots.savings.some(item => item.id === record.id)) return record;
+      if (record.type === 'withdrawal') {
+        const expense = snapshots.expenses.find(item => item.id === record.expenseId);
+        if (!expense) throw new ValidationError({ record: 'The linked expense is missing; this withdrawal cannot be restored alone.' });
+        const balance = computeSavingsBalance(snapshots.savings);
+        if (balance.balancePaise < Math.round(record.amount * 100)) throw new InsufficientSavingsError(balance.balancePaise);
+      }
+      collections.savings.add(record);
+      return record;
+    });
+  }
+
+  transferSalaryBalance(salaryId) {
+    const now = this.now();
+    const timestamp = now.toISOString();
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const salary = snapshots.salaries.find(record => record.id === salaryId);
+      if (!salary) throw new NotFoundError(salaryId, 'That salary no longer exists.');
+      const pool = computeSalaryPool(salary, snapshots.expenses, snapshots.savings);
+      if (pool.remainingPaise <= 0) throw new InsufficientSalaryBalanceError();
+      const record = {
+        id: this.makeId(), monthKey: localToday(now).slice(0, 7), amount: pool.remaining,
+        amountPaise: pool.remainingPaise, date: localToday(now), description: `Remaining ${salary.monthKey} salary`,
+        type: 'salary_balance_transfer', salaryRecordId: salary.id, createdAt: timestamp, updatedAt: timestamp
+      };
+      collections.savings.add(record);
+      return record;
+    });
+  }
+
+  deleteSalaryIfUnused(id) {
+    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const used = snapshots.expenses.some(record => record.salaryRecordId === id) ||
+        snapshots.savings.some(record => record.salaryRecordId === id);
+      if (used) throw new ReferencedSalaryError();
+      collections.salaries.delete(id);
+    });
   }
 }

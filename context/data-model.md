@@ -137,3 +137,25 @@ Restore rules:
 6. Savings `monthKey` always matches `date`'s month after a write.
 7. `amountPaise` is an integer and matches `amount` within rounding.
 8. Only records belonging to the selected month affect its remaining balance.
+
+---
+
+## Addendum — 6 November 2026: salary-pool allocations and typed savings ledger
+
+IndexedDB schema is now **v3**. The upgrade is additive: it keeps every existing store and record, adding expense relationship indexes plus savings ledger indexes (`by_type`, `by_salaryRecordId`, unique sparse `by_expenseId`).
+
+### Current record relationships
+
+- Expense records carry `paymentSource: 'salary' | 'savings'`, `salaryRecordId` for Salary Balance, and optional `allocationStatus: 'needs_review'` for unresolved historical data.
+- Savings records carry `type: 'contribution' | 'salary_balance_transfer' | 'withdrawal'`; optional `salaryRecordId`; and `expenseId` only for withdrawals.
+- A savings-funded expense has exactly one withdrawal, enforced by the unique sparse `by_expenseId` index. Creating, editing, deleting and restoring the expense updates that withdrawal in the same multi-store IndexedDB transaction.
+- Salary pool balance is derived from its salary, allocated salary expenses, contributions and prior balance transfers. Savings balance is credits minus withdrawals. Neither balance is stored separately.
+- The active pool is the salary with greatest `createdAt`; salary creation timestamps are monotonic relative to existing salary records so a newly added pool becomes active.
+
+### One-time v2 allocation migration
+
+`migration:salary-allocation:v1` is written transactionally with expense and savings updates. Each old record is linked to the latest salary created at or before the transaction’s `createdAt`. It preserves date, ID, amount and timestamps. A record without a reliable timestamp match stays unallocated with `allocationStatus: 'needs_review'`; it does not reduce an arbitrary pool. Meta stores unresolved IDs for a one-time review notice. The marker makes the migration idempotent.
+
+### Backup v4
+
+Version 4 preserves payment source, salary IDs, savings transaction types and expense links. Version 3 and expense-only restores remain supported, with timestamp assignment for records lacking allocation fields. Restore validates relationships and the nonnegative savings invariant before replacing related collections atomically.

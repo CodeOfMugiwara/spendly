@@ -8,9 +8,9 @@
 
 export const STORAGE_KEY = 'spendly_expenses_v1';
 export const DB_NAME = 'spendly';
-// v1: expenses + meta. v2 adds `salaries` and `savings` stores without touching
-// the existing expense data (see js/db.js).
-export const DB_VERSION = 2;
+// v1: expenses + meta. v2 adds `salaries` and `savings`; v3 adds relationship
+// indexes without touching existing records (see js/db.js).
+export const DB_VERSION = 3;
 
 export const PERIODS = Object.freeze(['week', 'month', 'quarter', 'year']);
 
@@ -324,6 +324,9 @@ export function normalizeExpenseRecord(raw, options = {}) {
       amount: roundMoney(amount),
       description,
       date,
+      ...(raw.paymentSource === 'savings' || raw.paymentSource === 'salary' ? { paymentSource: raw.paymentSource } : {}),
+      ...(typeof raw.salaryRecordId === 'string' ? { salaryRecordId: raw.salaryRecordId } : {}),
+      ...(raw.allocationStatus === 'needs_review' ? { allocationStatus: 'needs_review' } : {}),
       createdAt,
       updatedAt
     }
@@ -716,6 +719,10 @@ export function normalizeSavingRecord(raw, options = {}) {
       amountPaise: toPaise(resolved),
       date,
       description,
+      ...(typeof raw.type === 'string' && ['contribution', 'salary_balance_transfer', 'withdrawal'].includes(raw.type) ? { type: raw.type } : {}),
+      ...(typeof raw.salaryRecordId === 'string' ? { salaryRecordId: raw.salaryRecordId } : {}),
+      ...(typeof raw.expenseId === 'string' ? { expenseId: raw.expenseId } : {}),
+      ...(raw.allocationStatus === 'needs_review' ? { allocationStatus: 'needs_review' } : {}),
       createdAt,
       updatedAt
     }
@@ -732,7 +739,10 @@ export function findSalaryForMonth(salaries, monthKey) {
 }
 
 export function sumSavingsPaise(savings) {
-  return savings.reduce((sum, record) => sum + toPaise(record.amount), 0);
+  return savings.reduce((sum, record) => {
+    const amount = toPaise(record.amount);
+    return sum + (record.type === 'withdrawal' ? -amount : amount);
+  }, 0);
 }
 
 export function sumSavings(savings) {
@@ -777,7 +787,7 @@ export function groupSavingsByMonth(savings) {
     }
     const group = groups.get(key);
     group.items.push(record);
-    group.totalPaise += toPaise(record.amount);
+    group.totalPaise += record.type === 'withdrawal' ? -toPaise(record.amount) : toPaise(record.amount);
     group.count += 1;
   }
 
@@ -788,6 +798,68 @@ export function groupSavingsByMonth(savings) {
       items: sortSavings(group.items)
     }))
     .sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
+}
+
+/** The salary pool most recently added by the user is the active pool. */
+export function findActiveSalary(salaries) {
+  if (!Array.isArray(salaries) || !salaries.length) return null;
+  return [...salaries].sort((a, b) => {
+    const time = String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''));
+    if (time) return time;
+    const month = String(b.monthKey ?? '').localeCompare(String(a.monthKey ?? ''));
+    return month || String(b.id ?? '').localeCompare(String(a.id ?? ''));
+  })[0] ?? null;
+}
+
+/** Calculate one salary pool from its linked expenses and savings ledger. */
+export function computeSalaryPool(salary, expenses = [], savings = []) {
+  if (!salary) return { salary, expensePaise: 0, contributionPaise: 0, transferPaise: 0, remainingPaise: 0, remaining: 0 };
+  const allocatedExpenses = expenses.filter(record => record.paymentSource !== 'savings' && record.salaryRecordId === salary.id);
+  const allocatedSavings = savings.filter(record => record.salaryRecordId === salary.id);
+  const expensePaise = allocatedExpenses.reduce((sum, record) => sum + toPaise(record.amount), 0);
+  const contributionPaise = allocatedSavings
+    .filter(record => (record.type ?? 'contribution') === 'contribution')
+    .reduce((sum, record) => sum + toPaise(record.amount), 0);
+  const transferPaise = allocatedSavings
+    .filter(record => record.type === 'salary_balance_transfer')
+    .reduce((sum, record) => sum + toPaise(record.amount), 0);
+  const remainingPaise = toPaise(salary.amount) - expensePaise - contributionPaise - transferPaise;
+  return {
+    salary,
+    expensePaise,
+    contributionPaise,
+    transferPaise,
+    remainingPaise,
+    remaining: fromPaise(remainingPaise),
+    expenseTotal: fromPaise(expensePaise),
+    contributionTotal: fromPaise(contributionPaise),
+    transferTotal: fromPaise(transferPaise),
+    expenses: allocatedExpenses,
+    savings: allocatedSavings
+  };
+}
+
+/** Savings balance is credits less expense-linked withdrawals. */
+export function computeSavingsBalance(savings = []) {
+  const contributionPaise = savings
+    .filter(record => (record.type ?? 'contribution') === 'contribution')
+    .reduce((sum, record) => sum + toPaise(record.amount), 0);
+  const transferPaise = savings
+    .filter(record => record.type === 'salary_balance_transfer')
+    .reduce((sum, record) => sum + toPaise(record.amount), 0);
+  const withdrawalPaise = savings
+    .filter(record => record.type === 'withdrawal')
+    .reduce((sum, record) => sum + toPaise(record.amount), 0);
+  return {
+    contributionPaise,
+    transferPaise,
+    withdrawalPaise,
+    balancePaise: contributionPaise + transferPaise - withdrawalPaise,
+    contributionTotal: fromPaise(contributionPaise),
+    transferTotal: fromPaise(transferPaise),
+    withdrawalTotal: fromPaise(withdrawalPaise),
+    balance: fromPaise(contributionPaise + transferPaise - withdrawalPaise)
+  };
 }
 
 /**

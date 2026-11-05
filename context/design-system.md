@@ -121,3 +121,12 @@ Rules: one primary action per page; no page repeats another page’s main job; c
 - Month changes animate the amount with a 10 px horizontal slide (direction follows the navigation), never the whole card, so the layout does not jump.
 - The picker is a compact sheet (`.sheet--compact`, max 460 px) with the same grip, close button, header and primary button as every other sheet. Month and year are native selects side by side, matching the salary form.
 - Reduced motion disables the slide; reduced transparency keeps the dock and app bar opaque as before.
+
+## Addendum — 6 November 2026: funding source and ledger interaction
+
+- The salary card keeps the established forest-green surface; its largest value is now **Remaining balance**, with the supporting order Salary, Savings, Expenses. A negative remaining amount stays visible and red so an overspend does not disappear.
+- Expense sheets show a compact **Paid From** choice with available Salary Balance and Savings amounts. The selection is preserved during edits; changing it moves the financial effect atomically and savings never silently covers a shortfall.
+- Expense history uses a small source label to make funding visible without adding another prominent amount to each row.
+- Savings retains its dedicated two-tab page. The summary separates contributions, salary transfers and withdrawals; transfer and withdrawal rows use clear ledger labels so savings movements are not mistaken for expenses.
+- The prior-salary transfer prompt is contextual to a real positive balance. **Not Now** leaves the amount in its original pool, and the Salary page retains a later transfer action for deferred balances.
+- Screens were regenerated for the updated balance hierarchy and source selector. Check the real device keyboard/safe-area combinations manually; browser viewport coverage cannot fully reproduce iOS Safari.
