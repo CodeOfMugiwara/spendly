@@ -355,3 +355,14 @@ test('savings balance counts contributions and transfers as credits and withdraw
   assert.equal(result.transferTotal, 2000);
   assert.equal(result.withdrawalTotal, 3000);
 });
+
+test('external additions increase savings without reducing a salary pool', () => {
+  const active = { ...salary('2026-11', 20000), id: 'active', createdAt: '2026-11-01T00:00:00.000Z' };
+  const savings = [
+    { amount: 1000, type: 'contribution', sourceType: 'salary', salaryRecordId: 'active' },
+    { amount: 2000, type: 'external_contribution', sourceType: 'gift', salaryRecordId: undefined },
+    { amount: 500, type: 'external_contribution', sourceType: 'bonus', salaryRecordId: undefined }
+  ];
+  assert.equal(computeSalaryPool(active, [], savings).remaining, 19000);
+  assert.equal(computeSavingsBalance(savings).balance, 3500);
+});

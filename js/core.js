@@ -8,9 +8,9 @@
 
 export const STORAGE_KEY = 'spendly_expenses_v1';
 export const DB_NAME = 'spendly';
-// v1: expenses + meta. v2 adds `salaries` and `savings`; v3 adds relationship
-// indexes without touching existing records (see js/db.js).
-export const DB_VERSION = 3;
+// v1: expenses + meta. v2 adds salaries/savings, v3 relationship indexes and
+// v4 supports external funding labels without rewriting existing records.
+export const DB_VERSION = 4;
 
 export const PERIODS = Object.freeze(['week', 'month', 'quarter', 'year']);
 
@@ -324,7 +324,7 @@ export function normalizeExpenseRecord(raw, options = {}) {
       amount: roundMoney(amount),
       description,
       date,
-      ...(raw.paymentSource === 'savings' || raw.paymentSource === 'salary' ? { paymentSource: raw.paymentSource } : {}),
+      ...(raw.paymentSource === 'savings' || raw.paymentSource === 'salary' || raw.paymentSource === 'others' ? { paymentSource: raw.paymentSource } : {}),
       ...(typeof raw.salaryRecordId === 'string' ? { salaryRecordId: raw.salaryRecordId } : {}),
       ...(raw.allocationStatus === 'needs_review' ? { allocationStatus: 'needs_review' } : {}),
       createdAt,
@@ -719,7 +719,8 @@ export function normalizeSavingRecord(raw, options = {}) {
       amountPaise: toPaise(resolved),
       date,
       description,
-      ...(typeof raw.type === 'string' && ['contribution', 'salary_balance_transfer', 'withdrawal'].includes(raw.type) ? { type: raw.type } : {}),
+      ...(typeof raw.type === 'string' && ['contribution', 'salary_balance_transfer', 'withdrawal', 'external_contribution'].includes(raw.type) ? { type: raw.type } : {}),
+      ...(typeof raw.sourceType === 'string' && ['salary', 'gift', 'bonus', 'other'].includes(raw.sourceType) ? { sourceType: raw.sourceType } : {}),
       ...(typeof raw.salaryRecordId === 'string' ? { salaryRecordId: raw.salaryRecordId } : {}),
       ...(typeof raw.expenseId === 'string' ? { expenseId: raw.expenseId } : {}),
       ...(raw.allocationStatus === 'needs_review' ? { allocationStatus: 'needs_review' } : {}),
@@ -818,7 +819,7 @@ export function computeSalaryPool(salary, expenses = [], savings = []) {
   const allocatedSavings = savings.filter(record => record.salaryRecordId === salary.id);
   const expensePaise = allocatedExpenses.reduce((sum, record) => sum + toPaise(record.amount), 0);
   const contributionPaise = allocatedSavings
-    .filter(record => (record.type ?? 'contribution') === 'contribution')
+    .filter(record => (record.type ?? 'contribution') === 'contribution' || (record.type === 'contribution' && record.sourceType === 'salary'))
     .reduce((sum, record) => sum + toPaise(record.amount), 0);
   const transferPaise = allocatedSavings
     .filter(record => record.type === 'salary_balance_transfer')
@@ -842,7 +843,9 @@ export function computeSalaryPool(salary, expenses = [], savings = []) {
 /** Savings balance is credits less expense-linked withdrawals. */
 export function computeSavingsBalance(savings = []) {
   const contributionPaise = savings
-    .filter(record => (record.type ?? 'contribution') === 'contribution')
+    .filter(record => (record.type ?? 'contribution') === 'contribution' || (record.type === 'contribution' && record.sourceType === 'salary'))
+    .reduce((sum, record) => sum + toPaise(record.amount), 0);
+  const externalPaise = savings.filter(record => record.type === 'external_contribution')
     .reduce((sum, record) => sum + toPaise(record.amount), 0);
   const transferPaise = savings
     .filter(record => record.type === 'salary_balance_transfer')
@@ -854,11 +857,12 @@ export function computeSavingsBalance(savings = []) {
     contributionPaise,
     transferPaise,
     withdrawalPaise,
-    balancePaise: contributionPaise + transferPaise - withdrawalPaise,
+    externalPaise,
+    balancePaise: contributionPaise + transferPaise + externalPaise - withdrawalPaise,
     contributionTotal: fromPaise(contributionPaise),
     transferTotal: fromPaise(transferPaise),
     withdrawalTotal: fromPaise(withdrawalPaise),
-    balance: fromPaise(contributionPaise + transferPaise - withdrawalPaise)
+    balance: fromPaise(contributionPaise + transferPaise + externalPaise - withdrawalPaise)
   };
 }
 

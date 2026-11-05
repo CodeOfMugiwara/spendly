@@ -145,6 +145,7 @@ async function addExpense(page, { amount, description, date, source = 'salary' }
   await page.locator('#descriptionInput').fill(description);
   if (date) await page.locator('#dateInput').fill(date);
   if (source === 'savings') await page.locator('#paidFromSavings').check();
+  if (source === 'others') await page.locator('#paidFromOthers').check();
   await page.locator('#saveButton').click();
   await page.locator('#expenseSheet').waitFor({ state: 'hidden', timeout: 8000 });
 }
@@ -209,7 +210,7 @@ async function addSalary(page, { amount, monthKey, notes, transferChoice = 'Not 
   }
 }
 
-async function addSaving(page, { amount, description, fromTotalTab = false } = {}) {
+async function addSaving(page, { amount, description, source = 'salary', fromTotalTab = false } = {}) {
   await page.locator('[data-view="savings"]').click();
   if (fromTotalTab) {
     await page.locator('#savingsTabTotal').click();
@@ -220,6 +221,7 @@ async function addSaving(page, { amount, description, fromTotalTab = false } = {
   }
   await page.locator('#savingSheet').waitFor({ state: 'visible' });
   await page.locator('#savingAmountInput').fill(String(amount));
+  await page.locator('#savingSourceInput').selectOption(source);
   if (description) await page.locator('#savingDescriptionInput').fill(description);
   await page.locator('#saveSavingButton').click();
   await page.locator('#savingSheet').waitFor({ state: 'hidden', timeout: 8000 });
@@ -316,7 +318,7 @@ await run('add, edit, delete, undo, search, CSV, backup and restore work', async
   await waitForToast(page, 'Salary saved.');
   await page.locator('[data-view="dashboard"]').click();
   await addExpense(page, { amount: '1,250.50', description: 'Team dinner' });
-  await waitForToast(page, 'Expense saved.');
+  await waitForToast(page, 'Expense added successfully');
   assert.equal(await page.locator('#heroAmount').innerText(), formatMoney(1250.5));
   assert.equal(await page.locator('#heroCount').innerText(), '1');
   assert.equal(await page.locator('#glanceSection').isHidden(), false);
@@ -360,7 +362,7 @@ await run('add, edit, delete, undo, search, CSV, backup and restore work', async
   await page.locator('#amountInput').fill('80');
   await page.locator('#saveButton').click();
   await page.locator('#expenseSheet').waitFor({ state: 'hidden' });
-  await waitForToast(page, 'Expense updated.');
+  await waitForToast(page, 'Expense updated');
   assert.equal(
     await page.locator('#historyList .entry').filter({ hasText: 'Coffee' }).locator('.entry__amount').innerText(),
     formatMoney(80)
@@ -505,7 +507,7 @@ await run('the app launches, edits and exports with no network', async () => {
   await page.locator('[data-view="dashboard"]').click();
 
   await addExpense(page, { amount: '42', description: 'Offline chai' });
-  await waitForToast(page, 'Expense saved.');
+  await waitForToast(page, 'Expense added successfully');
   assert.equal((await dbSnapshot(page)).records.length, 5);
 
   await page.locator('[data-view="expenses"]').click();
@@ -516,7 +518,7 @@ await run('the app launches, edits and exports with no network', async () => {
   await page.locator('#amountInput').fill('45');
   await page.locator('#saveButton').click();
   await page.locator('#expenseSheet').waitFor({ state: 'hidden' });
-  await waitForToast(page, 'Expense updated.');
+  await waitForToast(page, 'Expense updated');
   assert.equal(
     await page.locator('#historyList .entry').filter({ hasText: 'Offline chai' }).locator('.entry__amount').innerText(),
     formatMoney(45)
@@ -587,7 +589,7 @@ await run('expenses and the offline shell survive a full browser restart', async
     await waitForToast(page, 'Salary saved.');
     await page.locator('[data-view="dashboard"]').click();
     await addExpense(page, { amount: '321', description: 'Survives a restart' });
-    await waitForToast(page, 'Expense saved.');
+    await waitForToast(page, 'Expense added successfully');
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     assert.equal((await dbSnapshot(page)).records.length, 1);
     await context.close();
@@ -631,7 +633,7 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   assert.equal(await page.locator('#salaryNotes').innerText(), '“November pay”');
 
   await addSaving(page, { amount: '1000', description: 'Emergency fund' });
-  await waitForToast(page, 'Savings added.');
+  await waitForToast(page, 'Salary contribution saved');
   assert.equal(await page.locator('#savingsMonthTotal').innerText(), formatMoney(1000));
 
   await addSaving(page, { amount: '500', description: 'Gold' });
@@ -683,7 +685,7 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   await page.locator('#savingAmountInput').fill('1200');
   await page.locator('#saveSavingButton').click();
   await page.locator('#savingSheet').waitFor({ state: 'hidden' });
-  await waitForToast(page, 'Savings updated.');
+  await waitForToast(page, 'Savings updated');
   assert.equal(await page.locator('#savingsMonthTotal').innerText(), formatMoney(1700));
 
   await page.locator('#savingsMonthList .entry').filter({ hasText: 'Gold' }).locator('.entry__menu').click();
@@ -721,6 +723,34 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   assert.equal(await page.locator('#allTotal').innerText(), formatMoney(1000));
   assert.equal(await page.locator('#allCount').innerText(), '1 expense');
 
+  await context.close();
+});
+
+await run('Others expenses and external savings never change salary balance', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  await gotoApp(page);
+  await addSalary(page, { amount: '20000' });
+  await addSaving(page, { amount: '1000', description: 'Set aside', source: 'salary' });
+  await addSaving(page, { amount: '2000', description: 'Family gift', source: 'gift' });
+  await addSaving(page, { amount: '500', description: 'Annual bonus', source: 'bonus' });
+  await addSaving(page, { amount: '300', description: 'Refund', source: 'other' });
+  await addExpense(page, { amount: '1500', description: 'External purchase', source: 'others' });
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(19000));
+  await page.locator('[data-view="savings"]').click();
+  assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(3800));
+  const snapshot = await dbSnapshot(page);
+  const externalExpense = snapshot.records.find(record => record.description === 'External purchase');
+  assert.equal(externalExpense.paymentSource, 'others');
+  assert.equal(externalExpense.salaryRecordId, null);
+  assert.equal(snapshot.savings.filter(record => record.type === 'withdrawal').length, 0);
+  assert.equal(snapshot.savings.filter(record => record.type === 'external_contribution').length, 3);
+  assert.equal(snapshot.savings.find(record => record.description === 'Family gift').sourceType, 'gift');
+  assert.equal(snapshot.savings.find(record => record.description === 'Annual bonus').sourceType, 'bonus');
+  assert.equal(snapshot.savings.find(record => record.description === 'Refund').sourceType, 'other');
   await context.close();
 });
 
@@ -1024,7 +1054,7 @@ await run('savings history spans months and stays out of expenses', async () => 
   const previous = shiftMonthKey(current, -1);
 
   await addSaving(page, { amount: '1000', description: 'This month' });
-  await waitForToast(page, 'Savings added.');
+  await waitForToast(page, 'Salary contribution saved');
 
   await page.locator('#savingsTabTotal').click();
   assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(1000));
@@ -1043,7 +1073,7 @@ await run('savings history spans months and stays out of expenses', async () => 
   await page.locator('#savingDescriptionInput').fill('Last month fund');
   await page.locator('#saveSavingButton').click();
   await page.locator('#savingSheet').waitFor({ state: 'hidden' });
-  await waitForToast(page, 'Savings added.');
+  await waitForToast(page, 'Salary contribution saved');
 
   assert.equal(await page.locator('#savingsTotalMonthAmount').innerText(), formatMoney(2500));
   assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(3500));
@@ -1246,7 +1276,7 @@ await run('salary and savings can be added and read with no network', async () =
   await addSalary(page, { amount: '50000' });
   await waitForToast(page, 'Salary saved.');
   await addSaving(page, { amount: '1000', description: 'Offline savings' });
-  await waitForToast(page, 'Savings added.');
+  await waitForToast(page, 'Salary contribution saved');
   assert.equal(await page.locator('#savingsMonthTotal').innerText(), formatMoney(1000));
 
   await page.reload({ waitUntil: 'load' });

@@ -11,6 +11,13 @@ A private, offline-first salary, expense and savings tracker built with plain HT
 
 <p align="center"><em>Sample data shown. The interface is designed for iPhone and also works on desktop.</em></p>
 
+## What changed in 3.3
+
+- Expense sources now include **Salary Balance**, **Savings**, and **Others**. Others are included in expense analytics but never deducted from either tracked balance.
+- Savings can receive salary contributions or independent Gift, Bonus and Other additions. External additions never affect salary pools and are broken out in savings activity/history.
+- The shared toast system provides success, error, warning and info variants, safe-area-aware top placement, manual dismissal and duplicate suppression.
+- IndexedDB v4 adds no destructive schema changes. Existing backup format v4 remains supported and preserves the expanded record fields.
+
 ## What changed in 3.2
 
 Spendly grew from a single-page expense tracker into a personal finance tracker with **four dedicated pages** and one financial rule:
@@ -221,7 +228,7 @@ The service worker (`sw.js`) precaches the app shell during install:
 
 Salary and savings are written through the same local repositories as expenses, so every feature works offline exactly as it does online. There are no network calls in any finance path.
 
-**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v10`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
+**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v11`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
 
 Offline use requires **one successful online load first**, over HTTPS or localhost. After that, the app and its local data work without a connection.
 
@@ -362,7 +369,7 @@ If an `origin` already exists, skip `git remote add` and just push. This reposit
 
 ### Updating an existing Netlify site
 
-1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v10`).
+1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v11`).
 2. Commit and push to the branch Netlify watches:
 
 ```bash

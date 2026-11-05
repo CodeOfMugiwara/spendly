@@ -56,6 +56,7 @@ import {
 import {
   DuplicateMonthError,
   FinancialLedgerRepository,
+  InsufficientSalaryBalanceError,
   InsufficientSavingsError,
   NoActiveSalaryError,
   ReferencedSalaryError,
@@ -465,9 +466,9 @@ function entryMarkup(expense, options = {}) {
   const safeAmount = escapeHTML(formatMoney(expense.amount));
   const initial = escapeHTML(firstCharacter(expense.description));
   const tint = avatarTint(expense.id);
-  const paidFrom = expense.paymentSource === 'savings'
-    ? 'Savings'
-    : expense.allocationStatus === 'needs_review' || !expense.salaryRecordId ? 'Source needs review' : 'Salary';
+  const paidFrom = expense.paymentSource === 'savings' ? 'Savings'
+    : expense.paymentSource === 'others' ? 'Others'
+      : expense.allocationStatus === 'needs_review' || !expense.salaryRecordId ? 'Source needs review' : 'Salary';
 
   return `<article class="entry">
     <button class="entry__main" type="button" data-edit="${safeId}" aria-label="Edit ${safeDescription}, ${safeAmount}, ${safeDate}">
@@ -619,7 +620,7 @@ function renderSavingsPage() {
   const monthTotals = savingsActivity(monthEntries);
   const monthTotal = fromPaise(monthTotals.contributionPaise + monthTotals.transferPaise - monthTotals.withdrawalPaise);
   const totals = savingsActivity(state.savings);
-  const total = fromPaise(totals.contributionPaise + totals.transferPaise - totals.withdrawalPaise);
+  const total = fromPaise(totals.contributionPaise + totals.transferPaise + totals.externalPaise - totals.withdrawalPaise);
   const groups = groupSavingsByMonth(state.savings);
 
   $('savingsMonthLabel').textContent = formatMonthKey(currentKey);
@@ -630,9 +631,11 @@ function renderSavingsPage() {
     : 'No entries yet this month';
   $('savingsMonthCount').textContent = monthEntries.length ? savingWord(monthEntries.length) : '';
   $('savingsMonthContributions').textContent = formatMoney(fromPaise(monthTotals.contributionPaise));
+  $('savingsMonthExternal').textContent = formatMoney(fromPaise(monthTotals.externalPaise));
   $('savingsMonthTransfers').textContent = formatMoney(fromPaise(monthTotals.transferPaise));
   $('savingsMonthWithdrawals').textContent = formatMoney(fromPaise(monthTotals.withdrawalPaise));
   $('savingsTotalContributions').textContent = formatMoney(fromPaise(totals.contributionPaise));
+  $('savingsTotalExternal').textContent = formatMoney(fromPaise(totals.externalPaise));
   $('savingsTotalTransfers').textContent = formatMoney(fromPaise(totals.transferPaise));
   $('savingsTotalWithdrawals').textContent = formatMoney(fromPaise(totals.withdrawalPaise));
 
@@ -711,16 +714,17 @@ function savingsActivity(records) {
     const type = record.type ?? 'contribution';
     if (type === 'salary_balance_transfer') totals.transferPaise += amount;
     else if (type === 'withdrawal') totals.withdrawalPaise += amount;
+    else if (type === 'external_contribution') totals.externalPaise += amount;
     else totals.contributionPaise += amount;
     return totals;
-  }, { contributionPaise: 0, transferPaise: 0, withdrawalPaise: 0 });
+  }, { contributionPaise: 0, transferPaise: 0, externalPaise: 0, withdrawalPaise: 0 });
 }
 
 function savingRowMarkup(record) {
   const safeId = escapeHTML(record.id);
   const type = record.type ?? 'contribution';
-  const title = record.description ? escapeHTML(record.description) : type === 'salary_balance_transfer' ? 'Salary balance transfer' : type === 'withdrawal' ? 'Savings withdrawal' : 'Savings contribution';
-  const sourceLabel = type === 'salary_balance_transfer' ? 'From salary balance' : type === 'withdrawal' ? 'Used for expense' : record.allocationStatus === 'needs_review' ? 'Salary source needs review' : 'From salary balance';
+  const title = record.description ? escapeHTML(record.description) : type === 'salary_balance_transfer' ? 'Salary balance transfer' : type === 'withdrawal' ? 'Savings withdrawal' : type === 'external_contribution' ? `${record.sourceType ?? 'Other'} added` : 'Savings contribution';
+  const sourceLabel = type === 'salary_balance_transfer' ? 'From salary balance' : type === 'withdrawal' ? 'Used for expense' : type === 'external_contribution' ? (record.sourceType ?? 'other') : record.allocationStatus === 'needs_review' ? 'Salary source needs review' : 'From salary balance';
   const meta = `${escapeHTML(formatDate(record.date))} · ${sourceLabel}`;
   const amount = escapeHTML(formatMoney(record.amount));
   const signedAmount = type === 'withdrawal' ? `−${amount}` : `+${amount}`;
@@ -919,6 +923,7 @@ function openExpenseSheet(id = null) {
   $('dateInput').value = record?.date ?? localToday();
   $('paidFromSalary').checked = (record?.paymentSource ?? 'salary') === 'salary';
   $('paidFromSavings').checked = record?.paymentSource === 'savings';
+  $('paidFromOthers').checked = record?.paymentSource === 'others';
   updateExpenseSourceOptions(record);
   clearExpenseErrors();
   syncQuickDates();
@@ -960,7 +965,7 @@ async function handleExpenseSubmit(event) {
     amount: $('amountInput').value,
     description: $('descriptionInput').value,
     date: $('dateInput').value,
-    paymentSource: $('paidFromSavings').checked ? 'savings' : 'salary'
+    paymentSource: $('paidFromSavings').checked ? 'savings' : $('paidFromOthers').checked ? 'others' : 'salary'
   });
 
   if (!checked.ok) {
@@ -971,7 +976,7 @@ async function handleExpenseSubmit(event) {
   state.savingExpense = true;
   setExpenseSaving(true, wasEditing);
   const session = $('expenseSheet').dataset.session;
-  const expenseInput = { ...checked.value, paymentSource: $('paidFromSavings').checked ? 'savings' : 'salary' };
+  const expenseInput = { ...checked.value, paymentSource: $('paidFromSavings').checked ? 'savings' : $('paidFromOthers').checked ? 'others' : 'salary' };
 
   try {
     if (wasEditing) await state.ledgerRepo.updateExpense(editingId, expenseInput);
@@ -981,13 +986,14 @@ async function handleExpenseSubmit(event) {
     // Only close the sheet the save came from; a fast second tap may have reopened it.
     if (isSameDialogSession($('expenseSheet'), session)) closeExpenseSheet();
     render();
-    showToast(wasEditing ? 'Expense updated.' : 'Expense saved.');
+    showToast(wasEditing ? 'Expense updated' : expenseInput.paymentSource === 'others' ? 'Expense recorded under Others' : expenseInput.paymentSource === 'savings' ? 'Expense added using Savings' : 'Expense added successfully', { tone: 'success' });
   } catch (error) {
     if (error instanceof ValidationError) {
       showExpenseErrors(error.errors);
     } else if (error instanceof InsufficientSavingsError) {
       $('savingsAvailableLabel').textContent = `${formatMoney(fromPaise(error.availablePaise))} available`;
       showFormError('formError', `Insufficient savings balance. ${formatMoney(fromPaise(error.availablePaise))} is available.`);
+      showToast('Insufficient savings balance', { tone: 'warning' });
     } else if (error instanceof NoActiveSalaryError) {
       showFormError('formError', 'No salary pool is available. Choose Savings or add a salary first.');
     } else if (error instanceof NotFoundError) {
@@ -1277,6 +1283,9 @@ function openSavingSheet(id = null, options = {}) {
   $('savingDateInput').max = localToday();
   $('savingDateInput').value = record?.date ?? defaultSavingDate(options.monthKey ?? state.savingsMonth);
   $('savingDescriptionInput').value = record?.description ?? '';
+  $('savingSourceInput').value = record?.sourceType ?? (record?.type === 'external_contribution' ? 'other' : 'salary');
+  $('savingSourceInput').disabled = record?.type === 'salary_balance_transfer';
+  updateSavingSourceHint();
   clearSavingErrors();
 
   const sheet = $('savingSheet');
@@ -1309,7 +1318,8 @@ async function handleSavingSubmit(event) {
   const input = {
     amount: $('savingAmountInput').value,
     date: $('savingDateInput').value,
-    description: $('savingDescriptionInput').value
+    description: $('savingDescriptionInput').value,
+    sourceType: $('savingSourceInput').value
   };
 
   state.savingEntry = true;
@@ -1319,23 +1329,29 @@ async function handleSavingSubmit(event) {
   try {
     const saved = wasEditing
       ? await state.ledgerRepo.updateSaving(editingId, input)
-      : await state.ledgerRepo.createContribution(input);
+      : input.sourceType === 'salary'
+        ? await state.ledgerRepo.createContribution(input)
+        : await state.ledgerRepo.createExternalContribution(input);
 
     await refreshAll();
     if (saved?.monthKey) state.savingsMonth = saved.monthKey;
     if (isSameDialogSession($('savingSheet'), session)) closeSavingSheet();
     render();
-    showToast(wasEditing ? 'Savings updated.' : 'Savings added.');
+    showToast(wasEditing ? 'Savings updated' : input.sourceType === 'salary' ? 'Salary contribution saved' : `${input.sourceType[0].toUpperCase()}${input.sourceType.slice(1)} added to savings`, { tone: 'success' });
   } catch (error) {
     if (error instanceof ValidationError) {
       showFieldGroupErrors(SAVING_FIELDS, error.errors);
     } else if (error instanceof NoActiveSalaryError) {
       showFormError('savingFormError', 'Add a salary first. Savings contributions are allocated to the active salary balance.');
+    } else if (error instanceof InsufficientSalaryBalanceError) {
+      showFormError('savingFormError', 'Insufficient salary balance for this contribution.');
+      showToast('Insufficient salary balance', { tone: 'warning' });
     } else if (error instanceof NotFoundError) {
       showFormError('savingFormError', 'That savings entry no longer exists. Close this sheet and try again.');
     } else {
       console.error('Could not save savings:', error);
       showFormError('savingFormError', 'Couldn’t save to this device. Check browser storage and try again.');
+      showToast('Unable to save savings', { tone: 'error' });
     }
   } finally {
     state.savingEntry = false;
@@ -1349,6 +1365,13 @@ function setSavingSaving(isSaving, wasEditing) {
   $('saveSavingButton').textContent = isSaving
     ? 'Saving…'
     : (wasEditing ? 'Update savings' : 'Save savings');
+}
+
+function updateSavingSourceHint() {
+  const salary = $('savingSourceInput').value === 'salary';
+  $('savingSourceHint').textContent = salary
+    ? 'This amount will be deducted from your active salary.'
+    : 'This adds to Savings without changing your salary balance.';
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1551,7 +1574,7 @@ function exportCsv() {
       expense.date,
       expense.description,
       Number(expense.amount).toFixed(2),
-      expense.paymentSource === 'savings' ? 'Savings' : expense.salaryRecordId ? 'Salary' : 'Needs review'
+      expense.paymentSource === 'savings' ? 'Savings' : expense.paymentSource === 'others' ? 'Others' : expense.salaryRecordId ? 'Salary' : 'Needs review'
     ])
   ];
   const csv = rows.map(row => row.map(csvCell).join(',')).join('\r\n');
@@ -1728,15 +1751,18 @@ async function handleRestoreFile(file) {
 /* -------------------------------------------------------------------------- */
 
 function showToast(message, options = {}) {
-  const { tone = 'default', actionLabel = null, onAction = null } = options;
-  const duration = options.duration ?? (actionLabel ? 7000 : 4200);
+  const { tone = 'success', actionLabel = null, onAction = null } = options;
+  const duration = options.duration ?? (actionLabel ? 7000 : tone === 'error' || tone === 'warning' ? 4500 : tone === 'info' ? 3000 : 2800);
   const toast = $('toast');
+
+  if (!toast.hidden && $('toastMessage').textContent === message && toast.dataset.tone === tone) return;
 
   window.clearTimeout(state.toastTimer);
   toast.dataset.tone = tone;
+  toast.setAttribute('role', tone === 'error' ? 'alert' : 'status');
   toast.hidden = false;
   $('toastMessage').textContent = message;
-  toast.querySelector('use').setAttribute('href', tone === 'error' ? '#i-x' : '#i-check');
+  toast.querySelector('.toast__icon use').setAttribute('href', tone === 'error' ? '#i-x' : tone === 'warning' || tone === 'info' ? '#i-info' : '#i-check');
 
   const action = $('toastAction');
   action.hidden = !actionLabel;
@@ -1755,6 +1781,8 @@ function showToast(message, options = {}) {
       }
     : null;
 
+  $('toastDismiss').onclick = hideToast;
+
   state.toastTimer = window.setTimeout(hideToast, duration);
 }
 
@@ -1762,10 +1790,11 @@ function hideToast() {
   window.clearTimeout(state.toastTimer);
   const toast = $('toast');
   toast.hidden = true;
-  toast.querySelector('use').setAttribute('href', '#i-check');
+  toast.querySelector('.toast__icon use').setAttribute('href', '#i-check');
   const action = $('toastAction');
   action.hidden = true;
   action.onclick = null;
+  $('toastDismiss').onclick = null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2078,6 +2107,7 @@ function bindEvents() {
     source.addEventListener('change', () => updateExpenseSourceOptions());
   }
   $('amountInput').addEventListener('input', () => updateExpenseSourceOptions());
+  $('savingSourceInput').addEventListener('change', updateSavingSourceHint);
   $('seeAllButton').addEventListener('click', () => showView('expenses'));
   $('allTimeButton').addEventListener('click', () => showView('expenses'));
 

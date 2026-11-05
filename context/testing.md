@@ -112,3 +112,7 @@ The source-aware ledger adds workflows for cross-month allocation by salary entr
 - Timestamp migration assigns legacy transactions to the latest salary at or before their `createdAt`. Records with no reliable salary match are intentionally preserved as unallocated and require manual source review; migration does not guess from the transaction's calendar month.
 
 The suite passed after the migration and UI changes; run `npm test` and `npm run test:e2e` to reproduce. VoiceOver, real iPhone safe areas, and second-origin restore remain manual checks.
+
+## Addendum — 6 November 2026: external funding verification
+
+Final verification after adding Others expenses, external Gift/Bonus/Other savings, salary contribution limits and toast updates: `npm test` passed 57/57; `npm run test:e2e` passed 18/18, including the new source-isolation scenario. IndexedDB v4 upgrade is additive and backups remain compatible at version 4.

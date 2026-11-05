@@ -477,7 +477,8 @@
             <p class="savings-hero__amount" id="savingsMonthTotal">₹0.00</p>
             <p class="savings-hero__meta" id="savingsMonthMeta">No entries yet</p>
             <div class="savings-breakdown" aria-label="This month savings activity">
-              <span>Contributions <strong id="savingsMonthContributions">₹0.00</strong></span>
+              <span>Salary contributions <strong id="savingsMonthContributions">₹0.00</strong></span>
+              <span>External additions <strong id="savingsMonthExternal">₹0.00</strong></span>
               <span>Transfers <strong id="savingsMonthTransfers">₹0.00</strong></span>
               <span>Withdrawals <strong id="savingsMonthWithdrawals">₹0.00</strong></span>
             </div>
@@ -504,7 +505,8 @@
             <p class="savings-hero__amount" id="savingsTotalAmount">₹0.00</p>
             <p class="savings-hero__meta" id="savingsMonthsCount">Across 0 months</p>
             <div class="savings-breakdown" aria-label="Total savings activity">
-              <span>Contributions <strong id="savingsTotalContributions">₹0.00</strong></span>
+              <span>Salary contributions <strong id="savingsTotalContributions">₹0.00</strong></span>
+              <span>External additions <strong id="savingsTotalExternal">₹0.00</strong></span>
               <span>Transfers <strong id="savingsTotalTransfers">₹0.00</strong></span>
               <span>Withdrawals <strong id="savingsTotalWithdrawals">₹0.00</strong></span>
             </div>
@@ -631,11 +633,17 @@
           <legend>Paid From</legend>
           <label class="source-option" for="paidFromSalary">
             <input id="paidFromSalary" type="radio" name="paymentSource" value="salary" checked>
+            <svg class="icon source-option__icon" aria-hidden="true"><use href="#i-rupee"></use></svg>
             <span class="source-option__copy"><strong>Salary Balance</strong><small id="salaryAvailableLabel">₹0.00 available</small></span>
           </label>
           <label class="source-option" for="paidFromSavings">
             <input id="paidFromSavings" type="radio" name="paymentSource" value="savings">
+            <svg class="icon source-option__icon" aria-hidden="true"><use href="#i-savings"></use></svg>
             <span class="source-option__copy"><strong>Savings</strong><small id="savingsAvailableLabel">₹0.00 available</small></span>
+          </label>
+          <label class="source-option" for="paidFromOthers">
+            <input id="paidFromOthers" type="radio" name="paymentSource" value="others">
+            <span class="source-option__copy"><strong>Others</strong><small>External funds</small></span>
           </label>
           <p class="field__error" id="paymentSourceError" hidden></p>
         </fieldset>
@@ -736,6 +744,17 @@
         </div>
 
         <div class="field">
+          <label for="savingSourceInput">Source</label>
+          <select id="savingSourceInput" name="sourceType">
+            <option value="salary">Salary Contribution</option>
+            <option value="gift">Gift</option>
+            <option value="bonus">Bonus</option>
+            <option value="other">Other</option>
+          </select>
+          <p class="field__hint" id="savingSourceHint">This amount will be deducted from your active salary.</p>
+        </div>
+
+        <div class="field">
           <label for="savingDescriptionInput">Description <span class="field__optional">optional</span></label>
           <input id="savingDescriptionInput" name="description" type="text" maxlength="100" autocomplete="off" placeholder="Emergency fund, gold, SIP…" aria-describedby="savingDescriptionError">
           <p class="field__error" id="savingDescriptionError" hidden></p>
@@ -793,6 +812,7 @@
     <svg class="icon toast__icon" aria-hidden="true"><use href="#i-check"></use></svg>
     <p class="toast__message" id="toastMessage"></p>
     <button class="toast__action" type="button" id="toastAction" hidden>Undo</button>
+    <button class="toast__dismiss" type="button" id="toastDismiss" aria-label="Dismiss notification">×</button>
   </div>
 
   <script type="module" src="./js/app.js"></script>

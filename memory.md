@@ -307,3 +307,16 @@ One assertion expected ₹47,500 after a reload, but the savings entry had been 
 **Decision:** use entry timestamps for legacy assignment. Each legacy row goes to the most recently created salary at or before `createdAt`; transaction date is retained but does not decide funding. Unmatched records remain unallocated with `needs_review` status.
 
 **Docs:** `context/architecture.md`, `context/data-model.md`, `context/design-system.md`, `context/testing.md`, `context/roadmap.md` and README contain the current model, migration and deployment steps.
+
+## 10. Version 3.3.0 — 6 November 2026 — External sources and refined notifications
+
+**Why:** not all spending comes from salary or savings, and not all savings originate from salary. Spendly now records outside money without distorting either tracked pool.
+
+- Expenses now support salary, savings, and Others. Others remains in expense analytics/history/CSV and does not debit salary or Savings.
+- Savings supports salary contributions plus independent Gift, Bonus and Other additions. Salary contributions are limited by remaining salary; external credits never affect salary.
+- Savings history and totals distinguish salary contributions, transfers, external additions, and withdrawals. Expense-linked withdrawals remain atomic.
+- Toasts use one shared surface with tone variants, adaptive duration, safe-area top positioning, manual dismissal, duplicate suppression and success after persistence.
+- IndexedDB version 4 is additive; no store is reset. Existing unknown sources keep their prior salary interpretation unless the user edits them.
+- Verification in progress for unit and browser suites; final result is reported with this delivery.
+
+Verification update for version 3.3.0: 57 unit tests and 18 browser scenarios pass. New browser coverage confirms Others expenses affect expense totals but no financial pool, and external additions affect Savings only.

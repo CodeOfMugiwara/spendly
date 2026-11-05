@@ -771,11 +771,11 @@ export class FinancialLedgerRepository {
     });
   }
 
-  /** Add a salary-funded or savings-funded expense with the current allocation. */
+  /** Add an expense funded by the active salary, savings or external money. */
   createExpense(input) {
     const checked = validateExpenseInput(input);
     if (!checked.ok) throw new ValidationError(checked.errors);
-    const paymentSource = input.paymentSource === 'savings' ? 'savings' : 'salary';
+    const paymentSource = ['savings', 'others'].includes(input.paymentSource) ? input.paymentSource : 'salary';
     const timestamp = this.now().toISOString();
     return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
       const activeSalary = findActiveSalary(snapshots.salaries);
@@ -809,14 +809,14 @@ export class FinancialLedgerRepository {
     return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
       const existing = snapshots.expenses.find(record => record.id === id);
       if (!existing) throw new NotFoundError(id);
-      const source = input.paymentSource === 'savings' ? 'savings' : 'salary';
+      const source = ['savings', 'others'].includes(input.paymentSource) ? input.paymentSource : 'salary';
       const withdrawal = snapshots.savings.find(record => record.type === 'withdrawal' && record.expenseId === id);
       const activeSalary = findActiveSalary(snapshots.salaries);
       if (source === 'salary' && !activeSalary) {
         throw new NoActiveSalaryError();
       }
 
-      const salaryRecordId = source === 'savings'
+      const salaryRecordId = source !== 'salary'
         ? null
         : (existing.paymentSource === 'savings' ? activeSalary.id : existing.salaryRecordId ?? activeSalary.id);
       const expense = {
@@ -886,10 +886,24 @@ export class FinancialLedgerRepository {
     return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
       const activeSalary = findActiveSalary(snapshots.salaries);
       if (!activeSalary) throw new NoActiveSalaryError();
+      const available = computeSalaryPool(activeSalary, snapshots.expenses, snapshots.savings).remainingPaise;
+      if (available < checked.value.amountPaise) throw new InsufficientSalaryBalanceError();
       const record = {
-        id: this.makeId(), ...checked.value, type: 'contribution', salaryRecordId: activeSalary.id,
+        id: this.makeId(), ...checked.value, type: 'contribution', sourceType: 'salary', salaryRecordId: activeSalary.id,
         createdAt: timestamp, updatedAt: timestamp
       };
+      collections.savings.add(record);
+      return record;
+    });
+  }
+
+  createExternalContribution(input) {
+    const checked = validateSavingInput(input, this.now());
+    if (!checked.ok) throw new ValidationError(checked.errors, 'These savings details are not valid.');
+    const timestamp = this.now().toISOString();
+    const sourceType = ['gift', 'bonus', 'other'].includes(input.sourceType) ? input.sourceType : 'other';
+    return this.#transaction(['savings'], 'readwrite', ({ collections }) => {
+      const record = { id: this.makeId(), ...checked.value, type: 'external_contribution', sourceType, createdAt: timestamp, updatedAt: timestamp };
       collections.savings.add(record);
       return record;
     });
@@ -904,7 +918,11 @@ export class FinancialLedgerRepository {
       const existing = snapshots.savings.find(record => record.id === id);
       if (!existing) throw new NotFoundError(id, 'That savings entry no longer exists.');
       if (existing.type === 'withdrawal') throw new ValidationError({ record: 'Edit this withdrawal from its linked expense.' });
-      const record = { ...existing, ...checked.value, id, type: existing.type ?? 'contribution', createdAt: existing.createdAt, updatedAt: timestamp };
+      const sourceType = ['gift', 'bonus', 'other'].includes(input.sourceType) ? input.sourceType : 'salary';
+      const type = existing.type === 'salary_balance_transfer' ? 'salary_balance_transfer' : sourceType === 'salary' ? 'contribution' : 'external_contribution';
+      const activeSalary = findActiveSalary(snapshots.salaries);
+      if (sourceType === 'salary' && !activeSalary) throw new NoActiveSalaryError();
+      const record = { ...existing, ...checked.value, id, type, sourceType: type === 'salary_balance_transfer' ? undefined : sourceType, salaryRecordId: type === 'salary_balance_transfer' ? existing.salaryRecordId : sourceType === 'salary' ? (existing.salaryRecordId ?? activeSalary.id) : undefined, createdAt: existing.createdAt, updatedAt: timestamp };
       const savingsBalance = computeSavingsBalance(snapshots.savings);
       const oldAmountPaise = Math.round(Number(existing.amount) * 100);
       const newAmountPaise = Math.round(Number(record.amount) * 100);
@@ -917,6 +935,11 @@ export class FinancialLedgerRepository {
           const available = computeSalaryPool(salary, snapshots.expenses, snapshots.savings).remainingPaise + oldAmountPaise;
           if (newAmountPaise > available) throw new InsufficientSalaryBalanceError();
         }
+      }
+      if (type === 'contribution') {
+        const salary = snapshots.salaries.find(item => item.id === record.salaryRecordId);
+        const available = salary ? computeSalaryPool(salary, snapshots.expenses, snapshots.savings).remainingPaise + (existing.type === 'contribution' ? oldAmountPaise : 0) : 0;
+        if (available < newAmountPaise) throw new InsufficientSalaryBalanceError();
       }
       collections.savings.put(record);
       return record;
