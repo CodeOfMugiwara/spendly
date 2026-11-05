@@ -159,3 +159,9 @@ IndexedDB schema is now **v3**. The upgrade is additive: it keeps every existing
 ### Backup v4
 
 Version 4 preserves payment source, salary IDs, savings transaction types and expense links. Version 3 and expense-only restores remain supported, with timestamp assignment for records lacking allocation fields. Restore validates relationships and the nonnegative savings invariant before replacing related collections atomically.
+
+## Addendum — 6 November 2026: Extra Income and combined savings
+
+IndexedDB v5 adds a separate `extraIncome` object store. Extra income balance is derived as income records minus allocation amounts on savings contributions. A single contribution record stores `salaryAllocationPaise` and `extraIncomeAllocations`; regular salary is consumed first and extra income fills only the remainder. Deleting or reducing allocated income is blocked. Older savings contributions without split fields retain their original salary allocation.
+
+JSON backup v5 includes extra income and funding allocation relationships. Older backups without that collection leave existing Extra Income untouched. Salary and extra income remain separate in all salary card calculations.

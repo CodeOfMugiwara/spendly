@@ -20,6 +20,7 @@ export const EXPENSES_STORE = 'expenses';
 export const META_STORE = 'meta';
 export const SALARIES_STORE = 'salaries';
 export const SAVINGS_STORE = 'savings';
+export const EXTRA_INCOME_STORE = 'extraIncome';
 
 function requestToPromise(request) {
   return new Promise((resolve, reject) => {
@@ -59,6 +60,14 @@ function ensureFinanceStores(db) {
 
 }
 
+function ensureExtraIncomeStore(db) {
+  if (!db.objectStoreNames.contains(EXTRA_INCOME_STORE)) {
+    const store = db.createObjectStore(EXTRA_INCOME_STORE, { keyPath: 'id' });
+    store.createIndex('by_date', 'date', { unique: false });
+    store.createIndex('by_createdAt', 'createdAt', { unique: false });
+  }
+}
+
 /** Open (and if needed create or upgrade) the Spendly database. */
 export function openExpenseDB(factory = globalThis.indexedDB) {
   if (!factory) return Promise.reject(new Error('IndexedDB is not available in this browser.'));
@@ -92,6 +101,7 @@ export function openExpenseDB(factory = globalThis.indexedDB) {
         // Missing expenseId fields are omitted from this index. The unique
         // index then guarantees one savings withdrawal per linked expense.
         if (!savings.indexNames.contains('by_expenseId')) savings.createIndex('by_expenseId', 'expenseId', { unique: true });
+        ensureExtraIncomeStore(db);
       } catch (error) {
         // Abort the versionchange transaction so IndexedDB rolls back to the
         // previous schema instead of leaving a half-created database.
@@ -239,6 +249,10 @@ export class IndexedDBSavingsStore extends IndexedDBCollection {
     const range = IDBKeyRange.bound(startISO, endExclusiveISO, false, true);
     return requestToPromise(index.getAll(range));
   }
+}
+
+export class IndexedDBExtraIncomeStore extends IndexedDBCollection {
+  constructor(db) { super(db, EXTRA_INCOME_STORE); }
 }
 
 export class IndexedDBExpenseStore {

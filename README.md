@@ -1,5 +1,14 @@
 # Spendly
 
+## Extra income and combined savings
+
+Spendly keeps Extra Income in its own IndexedDB store and shows its unallocated balance separately on the Salary page. Savings contributions use regular salary first, then allocate only the remaining amount from extra income. Each contribution remains a single savings credit with paise-level salary and extra-income allocation details. Used extra-income records cannot be deleted or reduced below their allocated amount.
+
+Extra Income supports freelancing, part-time, bonus and other sources. Gifts, bonuses and other manual Savings additions continue to be independent of both income pools. Expense sources and the four-page navigation are unchanged.
+
+The current implementation is Spendly 3.4.0, IndexedDB v5, service-worker cache v12, and JSON backup v5. Older backups remain supported; an older backup without an `extraIncome` collection leaves local Extra Income untouched.
+
+
 A private, offline-first salary, expense and savings tracker built with plain HTML, CSS and JavaScript. No build step, no account, no backend, no API keys.
 
 <p align="center">
@@ -16,7 +25,7 @@ A private, offline-first salary, expense and savings tracker built with plain HT
 - Expense sources now include **Salary Balance**, **Savings**, and **Others**. Others are included in expense analytics but never deducted from either tracked balance.
 - Savings can receive salary contributions or independent Gift, Bonus and Other additions. External additions never affect salary pools and are broken out in savings activity/history.
 - The shared toast system provides success, error, warning and info variants, safe-area-aware top placement, manual dismissal and duplicate suppression.
-- IndexedDB v4 adds no destructive schema changes. Existing backup format v4 remains supported and preserves the expanded record fields.
+- IndexedDB v5 adds an Extra Income store without destructive changes. Backup format v5 preserves extra-income records and savings funding allocations.
 
 ## What changed in 3.2
 
@@ -32,7 +41,7 @@ Spendly grew from a single-page expense tracker into a personal finance tracker 
 - **IndexedDB moved from v2 to v3** with additive relationship indexes and a one-time timestamp-based allocation migration. Existing records remain intact; ambiguous legacy records are flagged for review.
 - **The dashboard keeps calendar-based expense analytics** while salary balances follow explicit pool allocations.
 - **Money arithmetic uses integer paise** internally, so salary, savings and remaining balances never drift through floating-point addition.
-- **Backups are version 4** and include allocation IDs, savings types and withdrawal links. Version 3 and expense-only backups remain supported.
+- **Backups are version 5** and include extra income, savings allocation IDs, savings types and withdrawal links. Earlier backup versions and expense-only backups remain supported.
 - **All earlier features are preserved:** weekly/monthly/three-month/yearly totals, daily average, recent expenses, searchable history, editing, deletion with Undo, CSV export, JSON backup/restore and offline-first PWA behaviour.
 
 ## Features
@@ -228,7 +237,7 @@ The service worker (`sw.js`) precaches the app shell during install:
 
 Salary and savings are written through the same local repositories as expenses, so every feature works offline exactly as it does online. There are no network calls in any finance path.
 
-**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v11`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
+**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v12`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
 
 Offline use requires **one successful online load first**, over HTTPS or localhost. After that, the app and its local data work without a connection.
 
@@ -320,7 +329,7 @@ Separately from the schema upgrade, the existing expense migration still runs on
 Open **Expenses → Your data**.
 
 - **Export CSV** downloads expenses only (date, description, amount) with a UTF-8 BOM so Excel reads ₹ correctly. Salary and savings are intentionally excluded.
-- **Download backup** downloads a JSON file stamped `version: 4` containing expenses, salary pool IDs, typed savings movements and linked withdrawals.
+- **Download backup** downloads a JSON file stamped `version: 5` containing expenses, salaries, savings movements, extra income and funding links.
 - **Restore backup** validates the whole file before asking for confirmation. It downloads a safety copy of the current data, then replaces expenses and — when present in the file — salary and savings too. A restore can be undone immediately from the toast.
 - Version 3 and expense-only backups still restore. Legacy records are assigned by timestamps; optional collections absent from a backup remain untouched.
 - Restore validates salary references, withdrawal links, duplicate withdrawals and nonnegative Savings, then updates the related collections in one IndexedDB transaction.
@@ -369,7 +378,7 @@ If an `origin` already exists, skip `git remote add` and just push. This reposit
 
 ### Updating an existing Netlify site
 
-1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v11`).
+1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v12`).
 2. Commit and push to the branch Netlify watches:
 
 ```bash

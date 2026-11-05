@@ -140,3 +140,7 @@ Spendly 3.2 changes the financial allocation rule while retaining the four-view 
 - Backup restore validates relations and replaces provided collections in a single transaction; optional collections absent from old backups remain untouched. Backup format is v4; IndexedDB schema is v3.
 
 The previous month-only formula in the 3.0/3.1 history is superseded for salary balances. Dashboard expense analytics and Savings month tabs remain calendar-date based.
+
+## Addendum — 6 November 2026: Extra Income and salary-first savings allocation
+
+The Salary page displays regular salary remaining and extra-income remaining as separate amounts. Extra income has CRUD history on the Salary page, while its own store remains separate from monthly salary records. A salary-funded savings contribution is one savings ledger record with paise-based allocations to salary and zero or more extra-income entries. The multi-store IndexedDB transaction enforces available combined balance and salary-first priority. Existing savings records with no allocation breakdown continue to debit their historical salary pool.

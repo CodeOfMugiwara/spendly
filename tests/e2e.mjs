@@ -104,9 +104,10 @@ async function dbSnapshot(page) {
     const records = await readAll('expenses');
     const salaries = stores.includes('salaries') ? await readAll('salaries') : [];
     const savings = stores.includes('savings') ? await readAll('savings') : [];
+    const extraIncome = stores.includes('extraIncome') ? await readAll('extraIncome') : [];
     const meta = stores.includes('meta') ? await readAll('meta') : [];
     db.close();
-    return { records, salaries, savings, meta, stores };
+    return { records, salaries, savings, extraIncome, meta, stores };
   });
 }
 
@@ -225,6 +226,18 @@ async function addSaving(page, { amount, description, source = 'salary', fromTot
   if (description) await page.locator('#savingDescriptionInput').fill(description);
   await page.locator('#saveSavingButton').click();
   await page.locator('#savingSheet').waitFor({ state: 'hidden', timeout: 8000 });
+}
+
+async function addExtraIncome(page, { amount, source = 'freelancing', description = 'Extra work' } = {}) {
+  await page.locator('[data-view="salary"]').click();
+  await page.locator('#addExtraIncomeButton').click();
+  await page.locator('#extraIncomeSheet').waitFor({ state: 'visible' });
+  await page.locator('#extraIncomeAmount').fill(String(amount));
+  await page.locator('#extraIncomeDate').fill(daysAgoISO(0));
+  await page.locator('#extraIncomeSource').selectOption(source);
+  await page.locator('#extraIncomeDescription').fill(description);
+  await page.locator('#saveExtraIncomeButton').click();
+  await page.locator('#extraIncomeSheet').waitFor({ state: 'hidden' });
 }
 
 function firstOfMonthISO() {
@@ -396,7 +409,7 @@ await run('add, edit, delete, undo, search, CSV, backup and restore work', async
   const backup = await downloadFrom(page, () => page.locator('#downloadBackup').click());
   const parsedBackup = JSON.parse(backup.text);
   assert.equal(parsedBackup.app, 'Spendly');
-  assert.equal(parsedBackup.version, 4);
+  assert.equal(parsedBackup.version, 5);
   assert.equal(parsedBackup.expenses.length, 1);
   assert.ok(parsedBackup.expenses[0].createdAt);
   assert.equal(parsedBackup.salaries.length, 1);
@@ -723,6 +736,55 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   assert.equal(await page.locator('#allTotal').innerText(), formatMoney(1000));
   assert.equal(await page.locator('#allCount').innerText(), '1 expense');
 
+  await context.close();
+});
+
+await run('savings use salary first then preserve extra-income funding allocations', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  await gotoApp(page);
+  await addSalary(page, { amount: '10000' });
+  await addExpense(page, { amount: '5000', description: 'Salary spending' });
+  await addExtraIncome(page, { amount: '8000', source: 'freelancing', description: 'Website project' });
+  await page.locator('[data-extra-income-edit]').click();
+  await page.locator('#extraIncomeDescription').fill('Client website project');
+  await page.locator('#saveExtraIncomeButton').click();
+  await page.locator('#extraIncomeSheet').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(8000));
+  await addSaving(page, { amount: '10000', description: 'Combined contribution', source: 'salary' });
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
+  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(3000));
+  await page.locator('[data-view="savings"]').click();
+  assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(10000));
+  const snapshot = await dbSnapshot(page);
+  const saving = snapshot.savings.find(record => record.description === 'Combined contribution');
+  assert.equal(saving.amount, 10000);
+  assert.equal(saving.salaryAllocationPaise, 500000);
+  assert.deepEqual(saving.extraIncomeAllocations, [{ extraIncomeRecordId: snapshot.extraIncome[0].id, amountPaise: 500000 }]);
+  assert.equal(snapshot.extraIncome[0].description, 'Client website project');
+
+  await openRowMenu(page, '#savingsMonthList', 'Combined contribution');
+  await page.locator('#actionList .action__item').filter({ hasText: 'Edit savings' }).click();
+  await page.locator('#savingAmountInput').fill('14000');
+  await page.locator('#saveSavingButton').click();
+  await page.waitForTimeout(300);
+  if (await page.locator('#savingSheet').isVisible()) {
+    assert.match(await page.locator('#savingFormError').innerText(), /have ₹13,000\.00 available/i);
+    await page.locator('#closeSavingSheet').click();
+    await page.locator('#savingSheet').waitFor({ state: 'hidden' });
+  }
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
+  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(3000));
+  await page.locator('[data-view="savings"]').click();
+  assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(10000));
+  await page.locator('[data-view="salary"]').click();
+  await page.locator('[data-extra-income-delete]').click();
+  await waitForToast(page, 'funded savings');
+  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(3000));
   await context.close();
 });
 

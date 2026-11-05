@@ -10,7 +10,7 @@ export const STORAGE_KEY = 'spendly_expenses_v1';
 export const DB_NAME = 'spendly';
 // v1: expenses + meta. v2 adds salaries/savings, v3 relationship indexes and
 // v4 supports external funding labels without rewriting existing records.
-export const DB_VERSION = 4;
+export const DB_VERSION = 5;
 
 export const PERIODS = Object.freeze(['week', 'month', 'quarter', 'year']);
 
@@ -723,6 +723,8 @@ export function normalizeSavingRecord(raw, options = {}) {
       ...(typeof raw.sourceType === 'string' && ['salary', 'gift', 'bonus', 'other'].includes(raw.sourceType) ? { sourceType: raw.sourceType } : {}),
       ...(typeof raw.salaryRecordId === 'string' ? { salaryRecordId: raw.salaryRecordId } : {}),
       ...(typeof raw.expenseId === 'string' ? { expenseId: raw.expenseId } : {}),
+      ...(Number.isSafeInteger(raw.salaryAllocationPaise) && raw.salaryAllocationPaise >= 0 ? { salaryAllocationPaise: raw.salaryAllocationPaise } : {}),
+      ...(Array.isArray(raw.extraIncomeAllocations) ? { extraIncomeAllocations: raw.extraIncomeAllocations.filter(item => item && typeof item.extraIncomeRecordId === 'string' && Number.isSafeInteger(item.amountPaise) && item.amountPaise >= 0).map(item => ({ extraIncomeRecordId: item.extraIncomeRecordId, amountPaise: item.amountPaise })) } : {}),
       ...(raw.allocationStatus === 'needs_review' ? { allocationStatus: 'needs_review' } : {}),
       createdAt,
       updatedAt
@@ -819,8 +821,10 @@ export function computeSalaryPool(salary, expenses = [], savings = []) {
   const allocatedSavings = savings.filter(record => record.salaryRecordId === salary.id);
   const expensePaise = allocatedExpenses.reduce((sum, record) => sum + toPaise(record.amount), 0);
   const contributionPaise = allocatedSavings
-    .filter(record => (record.type ?? 'contribution') === 'contribution' || (record.type === 'contribution' && record.sourceType === 'salary'))
-    .reduce((sum, record) => sum + toPaise(record.amount), 0);
+    .filter(record => (record.type ?? 'contribution') === 'contribution')
+    .reduce((sum, record) => sum + (Number.isInteger(record.salaryAllocationPaise)
+      ? record.salaryAllocationPaise
+      : toPaise(record.amount)), 0);
   const transferPaise = allocatedSavings
     .filter(record => record.type === 'salary_balance_transfer')
     .reduce((sum, record) => sum + toPaise(record.amount), 0);
@@ -864,6 +868,13 @@ export function computeSavingsBalance(savings = []) {
     withdrawalTotal: fromPaise(withdrawalPaise),
     balance: fromPaise(contributionPaise + transferPaise + externalPaise - withdrawalPaise)
   };
+}
+
+export function extraIncomeRemaining(record, savings = []) {
+  const used = savings.reduce((sum, entry) => sum + (entry.extraIncomeAllocations ?? [])
+    .filter(item => item.extraIncomeRecordId === record.id)
+    .reduce((subtotal, item) => subtotal + Number(item.amountPaise ?? toPaise(item.amount ?? 0)), 0), 0);
+  return fromPaise(toPaise(record.amount) - used);
 }
 
 /**

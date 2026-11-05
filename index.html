@@ -424,6 +424,10 @@
 
           <p class="income-card__balance-label" id="salaryBalanceLabel">Remaining balance</p>
           <p class="income-card__amount" id="salaryAmount">₹0.00</p>
+          <div class="extra-income-balance">
+            <span>Extra income balance</span>
+            <strong id="extraIncomeBalance">₹0.00</strong>
+          </div>
           <p class="income-card__notes" id="salaryNotes" hidden></p>
           <p class="income-card__status" id="salaryStatus">No salary recorded for this month.</p>
 
@@ -449,6 +453,14 @@
             <span class="section__hint" id="salaryHistoryCount"></span>
           </div>
           <div id="salaryList"></div>
+        </section>
+
+        <section class="section" aria-labelledby="extraIncomeTitle">
+          <div class="section__head">
+            <div><h2 class="section__title" id="extraIncomeTitle">Extra income</h2><span class="section__hint" id="extraIncomeTotal">₹0.00 received</span></div>
+            <button class="text-button" type="button" id="addExtraIncomeButton">+ Add extra income</button>
+          </div>
+          <div id="extraIncomeList"></div>
         </section>
 
         <p class="footnote">
@@ -705,6 +717,26 @@
           <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
           Saved on this device. Works offline.
         </p>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Extra income sheet                                                   -->
+  <dialog class="sheet" id="extraIncomeSheet" aria-labelledby="extraIncomeSheetTitle">
+    <div class="sheet__grip" aria-hidden="true"></div>
+    <header class="sheet__head">
+      <button class="icon-button" type="button" id="closeExtraIncomeSheet" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>
+      <div class="sheet__titles"><h2 class="sheet__title" id="extraIncomeSheetTitle">Add extra income</h2><p class="sheet__sub">Tracked separately from regular salary</p></div>
+      <span class="sheet__spacer" aria-hidden="true"></span>
+    </header>
+    <div class="sheet__body">
+      <form id="extraIncomeForm" novalidate>
+        <p class="form-error" id="extraIncomeFormError" role="alert" hidden></p>
+        <div class="field"><label for="extraIncomeAmount">Amount</label><div class="money-input"><span class="money-input__currency" aria-hidden="true">₹</span><input id="extraIncomeAmount" type="text" inputmode="decimal" placeholder="0.00" required></div></div>
+        <div class="field"><label for="extraIncomeDate">Date</label><input id="extraIncomeDate" type="date" required></div>
+        <div class="field"><label for="extraIncomeSource">Source</label><select id="extraIncomeSource"><option value="freelancing">Freelancing</option><option value="part-time">Part-time</option><option value="bonus">Bonus</option><option value="other">Other</option></select></div>
+        <div class="field"><label for="extraIncomeDescription">Description <span class="field__optional">optional</span></label><input id="extraIncomeDescription" type="text" maxlength="100" placeholder="Weekend project, performance bonus…"></div>
+        <button class="button button--primary button--block" type="submit" id="saveExtraIncomeButton">Save extra income</button>
       </form>
     </div>
   </dialog>

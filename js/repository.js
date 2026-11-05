@@ -10,6 +10,7 @@ import {
   STORAGE_KEY,
   computeSalaryPool,
   computeSavingsBalance,
+  extraIncomeRemaining,
   findActiveSalary,
   localToday,
   isMonthKey,
@@ -74,9 +75,10 @@ export class ReferencedSalaryError extends Error {
 }
 
 export class InsufficientSalaryBalanceError extends Error {
-  constructor() {
-    super('The salary pool no longer has enough remaining balance for this transfer.');
+  constructor(availablePaise = null) {
+    super(availablePaise === null ? 'The salary pool no longer has enough remaining balance for this transfer.' : 'Insufficient balance across salary and extra income.');
     this.name = 'InsufficientSalaryBalanceError';
+    this.availablePaise = availablePaise;
   }
 }
 
@@ -566,7 +568,7 @@ export class SavingsRepository {
 }
 
 const ALLOCATION_MIGRATION_KEY = 'migration:salary-allocation:v1';
-const FINANCIAL_STORES = ['expenses', 'salaries', 'savings', 'meta'];
+const FINANCIAL_STORES = ['expenses', 'salaries', 'savings', 'meta', 'extraIncome'];
 
 /**
  * Multi-store ledger operations. Related expense/withdrawal changes use one
@@ -683,6 +685,8 @@ export class FinancialLedgerRepository {
   replaceCollections(data) {
     return this.#transaction(FINANCIAL_STORES, 'readwrite', ({ collections, snapshots }) => {
       const salaries = Array.isArray(data.salaries) ? data.salaries : snapshots.salaries;
+      const extraIncome = Array.isArray(data.extraIncome) ? data.extraIncome : snapshots.extraIncome;
+      const extraIncomeIds = new Set(extraIncome.map(record => record.id));
       const salaryIds = new Set(salaries.map(record => record.id));
       const assignSalary = createdAt => {
         const transactionTime = Date.parse(createdAt ?? '');
@@ -735,6 +739,22 @@ export class FinancialLedgerRepository {
           if (withdrawalByExpense.has(record.expenseId)) throw new ValidationError({ backup: 'An expense has duplicate savings withdrawals.' });
           withdrawalByExpense.set(record.expenseId, record);
         }
+        const extraAllocated = (record.extraIncomeAllocations ?? []).reduce((sum, item) => sum + (Number(item.amountPaise) || 0), 0);
+        if (record.type === 'contribution' && (record.salaryAllocationPaise ?? 0) + extraAllocated > Math.round(record.amount * 100)) {
+          throw new ValidationError({ backup: 'A savings contribution has invalid funding totals.' });
+        }
+        for (const allocation of record.extraIncomeAllocations ?? []) {
+          if (!extraIncomeIds.has(allocation.extraIncomeRecordId) || !Number.isSafeInteger(allocation.amountPaise) || allocation.amountPaise < 0) {
+            throw new ValidationError({ backup: 'A savings contribution refers to invalid extra income funding.' });
+          }
+        }
+      }
+      const allocationTotals = new Map();
+      for (const record of preparedSavings) for (const allocation of record.extraIncomeAllocations ?? []) {
+        allocationTotals.set(allocation.extraIncomeRecordId, (allocationTotals.get(allocation.extraIncomeRecordId) ?? 0) + allocation.amountPaise);
+      }
+      for (const income of extraIncome) if ((allocationTotals.get(income.id) ?? 0) > Math.round(income.amount * 100)) {
+        throw new ValidationError({ backup: 'Savings allocations exceed an extra income record.' });
       }
       for (const record of preparedExpenses) {
         if (record.salaryRecordId && !salaryIds.has(record.salaryRecordId)) {
@@ -759,6 +779,10 @@ export class FinancialLedgerRepository {
       if (Array.isArray(data.savings) || (Array.isArray(data.expenses) && preparedSavings.length !== snapshots.savings.length)) {
         collections.savings.clear();
         for (const record of preparedSavings) collections.savings.put(record);
+      }
+      if (Array.isArray(data.extraIncome)) {
+        collections.extraIncome.clear();
+        for (const record of extraIncome) collections.extraIncome.put(record);
       }
 
       const unresolvedExpenseIds = preparedExpenses.filter(record => record.allocationStatus === 'needs_review').map(record => record.id);
@@ -883,13 +907,26 @@ export class FinancialLedgerRepository {
     const checked = validateSavingInput(input, now);
     if (!checked.ok) throw new ValidationError(checked.errors, 'These savings details are not valid.');
     const timestamp = now.toISOString();
-    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(['expenses', 'salaries', 'savings', 'extraIncome'], 'readwrite', ({ collections, snapshots }) => {
       const activeSalary = findActiveSalary(snapshots.salaries);
       if (!activeSalary) throw new NoActiveSalaryError();
-      const available = computeSalaryPool(activeSalary, snapshots.expenses, snapshots.savings).remainingPaise;
-      if (available < checked.value.amountPaise) throw new InsufficientSalaryBalanceError();
+      const salaryAvailable = Math.max(0, computeSalaryPool(activeSalary, snapshots.expenses, snapshots.savings).remainingPaise);
+      const extraAvailable = snapshots.extraIncome.reduce((sum, entry) => sum + Math.round(extraIncomeRemaining(entry, snapshots.savings) * 100), 0);
+      const totalAvailable = salaryAvailable + extraAvailable;
+      if (totalAvailable < checked.value.amountPaise) throw new InsufficientSalaryBalanceError(totalAvailable);
+      let remaining = Math.max(0, checked.value.amountPaise - salaryAvailable);
+      const extraIncomeAllocations = [];
+      for (const entry of [...snapshots.extraIncome].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+        if (!remaining) break;
+        const available = Math.max(0, Math.round(extraIncomeRemaining(entry, snapshots.savings) * 100));
+        const amountPaise = Math.min(available, remaining);
+        if (amountPaise) extraIncomeAllocations.push({ extraIncomeRecordId: entry.id, amountPaise });
+        remaining -= amountPaise;
+      }
+      const salaryAllocationPaise = checked.value.amountPaise - extraIncomeAllocations.reduce((sum, item) => sum + item.amountPaise, 0);
       const record = {
         id: this.makeId(), ...checked.value, type: 'contribution', sourceType: 'salary', salaryRecordId: activeSalary.id,
+        salaryAllocationPaise, extraIncomeAllocations,
         createdAt: timestamp, updatedAt: timestamp
       };
       collections.savings.add(record);
@@ -914,7 +951,7 @@ export class FinancialLedgerRepository {
     const checked = validateSavingInput(input, now);
     if (!checked.ok) throw new ValidationError(checked.errors, 'These savings details are not valid.');
     const timestamp = now.toISOString();
-    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(['expenses', 'salaries', 'savings', 'extraIncome'], 'readwrite', ({ collections, snapshots }) => {
       const existing = snapshots.savings.find(record => record.id === id);
       if (!existing) throw new NotFoundError(id, 'That savings entry no longer exists.');
       if (existing.type === 'withdrawal') throw new ValidationError({ record: 'Edit this withdrawal from its linked expense.' });
@@ -923,6 +960,10 @@ export class FinancialLedgerRepository {
       const activeSalary = findActiveSalary(snapshots.salaries);
       if (sourceType === 'salary' && !activeSalary) throw new NoActiveSalaryError();
       const record = { ...existing, ...checked.value, id, type, sourceType: type === 'salary_balance_transfer' ? undefined : sourceType, salaryRecordId: type === 'salary_balance_transfer' ? existing.salaryRecordId : sourceType === 'salary' ? (existing.salaryRecordId ?? activeSalary.id) : undefined, createdAt: existing.createdAt, updatedAt: timestamp };
+      if (type === 'external_contribution') {
+        delete record.salaryAllocationPaise;
+        delete record.extraIncomeAllocations;
+      }
       const savingsBalance = computeSavingsBalance(snapshots.savings);
       const oldAmountPaise = Math.round(Number(existing.amount) * 100);
       const newAmountPaise = Math.round(Number(record.amount) * 100);
@@ -938,8 +979,20 @@ export class FinancialLedgerRepository {
       }
       if (type === 'contribution') {
         const salary = snapshots.salaries.find(item => item.id === record.salaryRecordId);
-        const available = salary ? computeSalaryPool(salary, snapshots.expenses, snapshots.savings).remainingPaise + (existing.type === 'contribution' ? oldAmountPaise : 0) : 0;
-        if (available < newAmountPaise) throw new InsufficientSalaryBalanceError();
+        const salaryAvailable = salary ? Math.max(0, computeSalaryPool(salary, snapshots.expenses, snapshots.savings).remainingPaise + (existing.type === 'contribution' ? Number(existing.salaryAllocationPaise ?? oldAmountPaise) : 0)) : 0;
+        const extraAvailable = snapshots.extraIncome.reduce((sum, entry) => sum + Math.round(extraIncomeRemaining(entry, snapshots.savings) * 100), 0) + (existing.extraIncomeAllocations ?? []).reduce((sum, item) => sum + item.amountPaise, 0);
+        if (salaryAvailable + extraAvailable < newAmountPaise) throw new InsufficientSalaryBalanceError(salaryAvailable + extraAvailable);
+        let remaining = Math.max(0, newAmountPaise - salaryAvailable);
+        record.extraIncomeAllocations = [];
+        for (const entry of [...snapshots.extraIncome].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+          if (!remaining) break;
+          const previouslyAllocated = (existing.extraIncomeAllocations ?? []).filter(item => item.extraIncomeRecordId === entry.id).reduce((sum, item) => sum + item.amountPaise, 0);
+          const available = Math.max(0, Math.round(extraIncomeRemaining(entry, snapshots.savings) * 100) + previouslyAllocated);
+          const amountPaise = Math.min(available, remaining);
+          if (amountPaise) record.extraIncomeAllocations.push({ extraIncomeRecordId: entry.id, amountPaise });
+          remaining -= amountPaise;
+        }
+        record.salaryAllocationPaise = newAmountPaise - record.extraIncomeAllocations.reduce((sum, item) => sum + item.amountPaise, 0);
       }
       collections.savings.put(record);
       return record;
@@ -973,6 +1026,45 @@ export class FinancialLedgerRepository {
         if (balance.balancePaise < Math.round(record.amount * 100)) throw new InsufficientSavingsError(balance.balancePaise);
       }
       collections.savings.add(record);
+      return record;
+    });
+  }
+
+  createExtraIncome(input) {
+    const checked = validateSavingInput(input, this.now());
+    if (!checked.ok) throw new ValidationError(checked.errors, 'These extra income details are not valid.');
+    const source = ['freelancing', 'part-time', 'bonus', 'other'].includes(input.source) ? input.source : 'other';
+    const timestamp = this.now().toISOString();
+    return this.#transaction(['extraIncome'], 'readwrite', ({ collections }) => {
+      const record = { id: this.makeId(), ...checked.value, source, createdAt: timestamp, updatedAt: timestamp };
+      collections.extraIncome.add(record);
+      return record;
+    });
+  }
+
+  updateExtraIncome(id, input) {
+    const checked = validateSavingInput(input, this.now());
+    if (!checked.ok) throw new ValidationError(checked.errors, 'These extra income details are not valid.');
+    const timestamp = this.now().toISOString();
+    return this.#transaction(['extraIncome', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const existing = snapshots.extraIncome.find(item => item.id === id);
+      if (!existing) throw new NotFoundError(id);
+      const allocated = snapshots.savings.reduce((sum, entry) => sum + (entry.extraIncomeAllocations ?? [])
+        .filter(item => item.extraIncomeRecordId === id).reduce((subtotal, item) => subtotal + item.amountPaise, 0), 0);
+      if (checked.value.amountPaise < allocated) throw new InsufficientSalaryBalanceError(allocated);
+      const record = { ...existing, ...checked.value, source: ['freelancing', 'part-time', 'bonus', 'other'].includes(input.source) ? input.source : 'other', id, createdAt: existing.createdAt, updatedAt: timestamp };
+      collections.extraIncome.put(record);
+      return record;
+    });
+  }
+
+  deleteExtraIncome(id) {
+    return this.#transaction(['extraIncome', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+      const record = snapshots.extraIncome.find(item => item.id === id);
+      if (!record) throw new NotFoundError(id);
+      const allocated = snapshots.savings.some(entry => (entry.extraIncomeAllocations ?? []).some(item => item.extraIncomeRecordId === id && item.amountPaise > 0));
+      if (allocated) throw new Error('This income has funded savings. Remove or edit those savings contributions before deleting it.');
+      collections.extraIncome.delete(id);
       return record;
     });
   }

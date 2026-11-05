@@ -16,6 +16,7 @@ import {
   computeMonthlyFinance,
   computeSalaryPool,
   computeSavingsBalance,
+  extraIncomeRemaining,
   currentMonthKey,
   findActiveSalary,
   findSalaryForMonth,
@@ -51,6 +52,7 @@ import {
   IndexedDBExpenseStore,
   IndexedDBSalaryStore,
   IndexedDBSavingsStore,
+  IndexedDBExtraIncomeStore,
   openSpendlyDB
 } from './db.js';
 import {
@@ -106,6 +108,8 @@ const state = {
   expenses: [],
   salaries: [],
   savings: [],
+  extraIncome: [],
+  editingExtraIncomeId: null,
   selectedPeriod: 'month',
   view: 'dashboard',
   search: '',
@@ -162,6 +166,7 @@ async function initData() {
     state.repo = new ExpenseRepository(new IndexedDBExpenseStore(database));
     state.salaryRepo = new SalaryRepository(new IndexedDBSalaryStore(database));
     state.savingsRepo = new SavingsRepository(new IndexedDBSavingsStore(database));
+    state.extraIncomeStore = new IndexedDBExtraIncomeStore(database);
     state.ledgerRepo = new FinancialLedgerRepository(database);
 
     let migration;
@@ -233,14 +238,16 @@ async function requestPersistentStorage() {
 
 async function refreshAll() {
   if (!state.repo) return;
-  const [expenses, salaries, savings] = await Promise.all([
+  const [expenses, salaries, savings, extraIncome] = await Promise.all([
     state.repo.list(),
     state.salaryRepo.list(),
-    state.savingsRepo.list()
+    state.savingsRepo.list(),
+    state.extraIncomeStore.getAll()
   ]);
   state.expenses = expenses;
   state.salaries = salaries;
   state.savings = savings;
+  state.extraIncome = extraIncome;
 }
 
 function hasAnyData() {
@@ -537,6 +544,8 @@ function renderSalaryPage() {
   $('salaryAmount').classList.toggle('is-unset', !record);
   $('salaryAmount').classList.toggle('is-negative', Boolean(record && finance.remainingPaise < 0));
   $('salaryAmount').setAttribute('aria-label', record ? `Remaining balance ${formatMoney(finance.remaining)}` : 'No salary pool for this month');
+  const extraBalance = state.extraIncome.reduce((sum, entry) => sum + extraIncomeRemaining(entry, state.savings), 0);
+  $('extraIncomeBalance').textContent = formatMoney(extraBalance);
 
   $('salaryNotes').hidden = !record?.notes;
   $('salaryNotes').textContent = record?.notes ? `“${record.notes}”` : '';
@@ -587,6 +596,61 @@ function renderSalaryPage() {
         action: 'Add this month’s salary',
         actionAttribute: 'data-empty-salary="true"'
       });
+  const extraTotal = state.extraIncome.reduce((sum, entry) => sum + Number(entry.amount), 0);
+  $('extraIncomeTotal').textContent = `${formatMoney(extraTotal)} received`;
+  $('extraIncomeList').innerHTML = state.extraIncome.length
+    ? `<div class="list-card">${[...state.extraIncome].sort((a, b) => b.date.localeCompare(a.date)).map(extraIncomeRowMarkup).join('')}</div>`
+    : `<p class="savings-month__empty">No extra income recorded yet.</p>`;
+}
+
+function extraIncomeRowMarkup(record) {
+  const remaining = extraIncomeRemaining(record, state.savings);
+  const desc = record.description || record.source;
+  return `<article class="entry"><div class="entry__main"><span class="entry__avatar entry__avatar--income">${ICON('rupee')}</span><span class="entry__text"><span class="entry__title">${escapeHTML(desc)}</span><span class="entry__meta">${escapeHTML(formatDate(record.date))} · ${escapeHTML(record.source)}</span></span><span class="entry__amount">${escapeHTML(formatMoney(remaining))} left</span></div><button class="entry__menu" type="button" data-extra-income-edit="${escapeHTML(record.id)}" aria-label="Edit ${escapeHTML(desc)}">${ICON('pencil')}</button><button class="entry__menu" type="button" data-extra-income-delete="${escapeHTML(record.id)}" aria-label="Delete ${escapeHTML(desc)}">${ICON('trash')}</button></article>`;
+}
+
+function openExtraIncomeSheet(recordId = null) {
+  const record = recordId ? state.extraIncome.find(item => item.id === recordId) : null;
+  state.editingExtraIncomeId = record?.id ?? null;
+  $('extraIncomeSheetTitle').textContent = record ? 'Edit extra income' : 'Add extra income';
+  $('extraIncomeAmount').value = record ? Number(record.amount).toFixed(2) : '';
+  $('extraIncomeDate').value = record?.date ?? localToday();
+  $('extraIncomeDate').max = localToday();
+  $('extraIncomeSource').value = record?.source ?? 'freelancing';
+  $('extraIncomeDescription').value = record?.description ?? '';
+  $('extraIncomeFormError').hidden = true;
+  openDialog($('extraIncomeSheet'));
+}
+
+async function saveExtraIncome(event) {
+  event.preventDefault();
+  const id = state.editingExtraIncomeId;
+  const input = { amount: $('extraIncomeAmount').value, date: $('extraIncomeDate').value, source: $('extraIncomeSource').value, description: $('extraIncomeDescription').value };
+  const button = $('saveExtraIncomeButton');
+  button.disabled = true;
+  try {
+    if (id) await state.ledgerRepo.updateExtraIncome(id, input);
+    else await state.ledgerRepo.createExtraIncome(input);
+    await refreshAll();
+    closeDialog($('extraIncomeSheet'));
+    render();
+    showToast(id ? 'Extra income updated' : 'Extra income added', { tone: 'success' });
+  } catch (error) {
+    $('extraIncomeFormError').textContent = error.message || 'Unable to save extra income.';
+    $('extraIncomeFormError').hidden = false;
+    showToast('Unable to save extra income', { tone: 'error' });
+  } finally { button.disabled = false; }
+}
+
+async function removeExtraIncome(id) {
+  try {
+    await state.ledgerRepo.deleteExtraIncome(id);
+    await refreshAll();
+    render();
+    showToast('Extra income deleted', { tone: 'success' });
+  } catch (error) {
+    showToast(error.message || 'Unable to delete extra income', { tone: 'error', duration: 5000 });
+  }
 }
 
 function salaryRowMarkup(record) {
@@ -1344,6 +1408,10 @@ async function handleSavingSubmit(event) {
     } else if (error instanceof NoActiveSalaryError) {
       showFormError('savingFormError', 'Add a salary first. Savings contributions are allocated to the active salary balance.');
     } else if (error instanceof InsufficientSalaryBalanceError) {
+      const amount = error.availablePaise === null ? null : formatMoney(fromPaise(error.availablePaise));
+      showFormError('savingFormError', amount ? `Insufficient balance. You have ${amount} available from salary and extra income.` : error.message);
+      showToast('Insufficient salary and extra income balance', { tone: 'warning' });
+    } else if (error instanceof InsufficientSalaryBalanceError) {
       showFormError('savingFormError', 'Insufficient salary balance for this contribution.');
       showToast('Insufficient salary balance', { tone: 'warning' });
     } else if (error instanceof NotFoundError) {
@@ -1369,8 +1437,12 @@ function setSavingSaving(isSaving, wasEditing) {
 
 function updateSavingSourceHint() {
   const salary = $('savingSourceInput').value === 'salary';
+  const salaryRemaining = findActiveSalary(state.salaries)
+    ? Math.max(0, computeSalaryPool(findActiveSalary(state.salaries), state.expenses, state.savings).remaining)
+    : 0;
+  const extraRemaining = state.extraIncome.reduce((sum, item) => sum + extraIncomeRemaining(item, state.savings), 0);
   $('savingSourceHint').textContent = salary
-    ? 'This amount will be deducted from your active salary.'
+    ? `Salary is used first, then extra income. ${formatMoney(salaryRemaining + extraRemaining)} available.`
     : 'This adds to Savings without changing your salary balance.';
 }
 
@@ -1589,18 +1661,20 @@ function snapshotData() {
   return {
     expenses: state.expenses.map(record => ({ ...record })),
     salaries: state.salaries.map(record => ({ ...record })),
-    savings: state.savings.map(record => ({ ...record }))
+    savings: state.savings.map(record => ({ ...record })),
+    extraIncome: state.extraIncome.map(record => ({ ...record }))
   };
 }
 
 function backupPayload(data = snapshotData()) {
   return {
     app: 'Spendly',
-    version: 4,
+    version: 5,
     exportedAt: new Date().toISOString(),
     expenses: sortExpenses(data.expenses ?? []),
     salaries: [...(data.salaries ?? [])],
-    savings: [...(data.savings ?? [])]
+    savings: [...(data.savings ?? [])],
+    extraIncome: [...(data.extraIncome ?? [])]
   };
 }
 
@@ -1620,7 +1694,8 @@ async function applyBackup(data) {
   await state.ledgerRepo.replaceCollections({
     expenses: data.expenses ?? [],
     salaries: data.salaries ?? [],
-    savings: data.savings ?? []
+    savings: data.savings ?? [],
+    ...(Array.isArray(data.extraIncome) ? { extraIncome: data.extraIncome } : {})
   });
 }
 
@@ -1655,11 +1730,13 @@ async function handleRestoreFile(file) {
     const checkedSavings = Array.isArray(parsed?.savings)
       ? parsed.savings.map(record => normalizeSavingRecord(record, options))
       : null;
+    const checkedExtraIncome = Array.isArray(parsed?.extraIncome) ? parsed.extraIncome.map(record => normalizeSavingRecord(record, options)) : null;
 
     const invalid = [
       ...checkedExpenses.filter(result => !result.ok),
       ...(checkedSalaries ?? []).filter(result => !result.ok),
-      ...(checkedSavings ?? []).filter(result => !result.ok)
+      ...(checkedSavings ?? []).filter(result => !result.ok),
+      ...(checkedExtraIncome ?? []).filter(result => !result.ok)
     ].length;
     if (invalid) {
       showToast(
@@ -1680,13 +1757,14 @@ async function handleRestoreFile(file) {
 
     const records = checkedExpenses.map(result => result.value);
     const savings = checkedSavings ? checkedSavings.map(result => result.value) : null;
+    const extraIncome = checkedExtraIncome ? checkedExtraIncome.map((result, index) => ({ ...result.value, source: parsed.extraIncome[index]?.source ?? 'other' })) : null;
     const uniqueIds = new Set(records.map(record => record.id));
     const countLabel = expenseWord(uniqueIds.size);
     const currentCount = expenseWord(state.expenses.length);
     const snapshot = snapshotData();
-    const financeNote = salaries || savings
-      ? ` Salary and savings in this file replace the ones on this device too.`
-      : ' Your salary and savings stay as they are.';
+    const financeNote = salaries || savings || extraIncome
+      ? ` Salary, savings${extraIncome ? ' and extra income' : ''} in this file replace the matching data on this device.`
+      : ' Your salary, savings and extra income stay as they are.';
 
     openActionSheet({
       title: 'Restore this backup?',
@@ -1707,7 +1785,8 @@ async function handleRestoreFile(file) {
               const result = await state.ledgerRepo.replaceCollections({
                 expenses: records,
                 ...(salaries ? { salaries } : {}),
-                ...(savings ? { savings } : {})
+                ...(savings ? { savings } : {}),
+                ...(extraIncome ? { extraIncome } : {})
               });
               await refreshAll();
               render();
@@ -2179,6 +2258,13 @@ function bindEvents() {
     }
     if (target.closest('[data-empty-salary]')) openSalarySheet();
   });
+  $('addExtraIncomeButton').addEventListener('click', () => openExtraIncomeSheet());
+  $('extraIncomeList').addEventListener('click', event => {
+    const button = event.target.closest('[data-extra-income-edit]');
+    if (button) openExtraIncomeSheet(button.dataset.extraIncomeEdit);
+    const remove = event.target.closest('[data-extra-income-delete]');
+    if (remove) void removeExtraIncome(remove.dataset.extraIncomeDelete);
+  });
 
   const savingsTablist = $('savingsTabMonth').parentElement;
   savingsTablist.addEventListener('click', event => {
@@ -2284,10 +2370,12 @@ function bindEvents() {
   $('savingForm').addEventListener('submit', event => {
     void handleSavingSubmit(event);
   });
+  $('extraIncomeForm').addEventListener('submit', event => { void saveExtraIncome(event); });
 
   $('closeExpenseSheet').addEventListener('click', closeExpenseSheet);
   $('closeSalarySheet').addEventListener('click', closeSalarySheet);
   $('closeSavingSheet').addEventListener('click', closeSavingSheet);
+  $('closeExtraIncomeSheet').addEventListener('click', () => closeDialog($('extraIncomeSheet')));
   $('actionCancel').addEventListener('click', () => closeDialog($('actionSheet')));
 
   for (const button of document.querySelectorAll('[data-quick-date]')) {

@@ -116,3 +116,7 @@ The suite passed after the migration and UI changes; run `npm test` and `npm run
 ## Addendum — 6 November 2026: external funding verification
 
 Final verification after adding Others expenses, external Gift/Bonus/Other savings, salary contribution limits and toast updates: `npm test` passed 57/57; `npm run test:e2e` passed 18/18, including the new source-isolation scenario. IndexedDB v4 upgrade is additive and backups remain compatible at version 4.
+
+## Addendum — 6 November 2026: extra-income coverage
+
+Browser coverage now verifies separate extra-income balance, salary-first allocation and persisted split links. Final suite counts follow after all restore and regression cases complete.
