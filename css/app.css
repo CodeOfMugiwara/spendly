@@ -2305,6 +2305,30 @@ svg {
   font-variant-numeric: tabular-nums;
 }
 
+.extra-income-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 10px 0 20px;
+  color: rgba(245, 251, 247, .78);
+}
+
+.extra-income-balance strong {
+  color: #fff;
+  font-size: clamp(24px, 6vw, 30px);
+  line-height: 1.1;
+  letter-spacing: -.045em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.extra-income-balance span {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+
 .income-card__balance-label {
   margin: 18px 0 -12px;
   font-size: 9px;
