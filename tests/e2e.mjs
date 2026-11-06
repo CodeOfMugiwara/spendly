@@ -9,6 +9,7 @@
 
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import AxeBuilder from '@axe-core/playwright';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -447,6 +448,38 @@ await run('add, edit, delete, undo, search, CSV, backup and restore work', async
   await context.close();
 });
 
+await run('backup reminders can be snoozed and a downloaded backup is recorded', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  const records = Array.from({ length: 10 }, (_, index) => ({
+    id: `backup-${index}`,
+    amount: index + 1,
+    description: `Backup reminder expense ${index + 1}`,
+    date: daysAgoISO(index)
+  }));
+  await seedLegacy(page, records);
+  await gotoApp(page);
+  await page.locator('[data-view="expenses"]').click();
+  assert.equal(await page.locator('#backupReminder').isVisible(), true, 'reminder appears after meaningful use');
+  await page.locator('#dismissBackupReminder').click();
+  await page.locator('#backupReminder').waitFor({ state: 'hidden' });
+  let metadata = (await dbSnapshot(page)).meta;
+  assert.ok(Date.parse(metadata.find(item => item.key === 'backup:reminder-dismissed-until')?.value));
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  await page.locator('[data-view="expenses"]').click();
+  assert.equal(await page.locator('#backupReminder').isVisible(), false, 'the snooze persists after reload');
+
+  const backup = await downloadFrom(page, () => page.locator('#downloadBackup').click());
+  assert.equal(JSON.parse(backup.text).expenses.length, 10);
+  metadata = (await dbSnapshot(page)).meta;
+  assert.ok(Date.parse(metadata.find(item => item.key === 'backup:last-download-request')?.value));
+  assert.match(await page.locator('#storageHealth').innerText(), /browser|storage/i);
+  await context.close();
+});
+
 /* -------------------------------------------------------------------------- */
 /* 3. Offline behaviour                                                      */
 /* -------------------------------------------------------------------------- */
@@ -639,7 +672,6 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   const current = monthKeyNow();
 
   await addSalary(page, { amount: '50,000', notes: 'November pay' });
-  await waitForToast(page, 'Salary saved.');
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(50000));
   assert.equal((await page.locator('#salaryHistoryCount').textContent()).trim(), '1 month');
   assert.equal(await page.locator('#salaryList .entry').count(), 1);
@@ -753,6 +785,16 @@ await run('savings use salary first then preserve extra-income funding allocatio
   await page.locator('#saveExtraIncomeButton').click();
   await page.locator('#extraIncomeSheet').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(8000));
+  assert.equal((await page.locator('#extraIncomeTotal').textContent()).trim(), `${formatMoney(8000)} received`);
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1);
+  await page.locator('#salaryPrevMonth').click();
+  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(0));
+  assert.equal((await page.locator('#extraIncomeTotal').textContent()).trim(), `${formatMoney(0)} received`);
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 0);
+  assert.match(await page.locator('#extraIncomeList').innerText(), /No other income added in/i);
+  await page.locator('#salaryNextMonth').click();
+  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(8000));
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1);
   await addSaving(page, { amount: '10000', description: 'Combined contribution', source: 'salary' });
   await page.locator('[data-view="salary"]').click();
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
@@ -785,6 +827,21 @@ await run('savings use salary first then preserve extra-income funding allocatio
   await page.locator('[data-extra-income-delete]').click();
   await waitForToast(page, 'funded savings');
   assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(3000));
+
+  const previousMonth = shiftMonthKey(monthKeyNow(), -1);
+  await page.locator('#salaryPrevMonth').click();
+  await page.locator('#addExtraIncomeButton').click();
+  await page.locator('#extraIncomeSheet').waitFor({ state: 'visible' });
+  assert.equal((await page.locator('#extraIncomeDate').inputValue()).slice(0, 7), previousMonth);
+  await page.locator('#extraIncomeAmount').fill('1000');
+  await page.locator('#extraIncomeDescription').fill('Previous month project');
+  await page.locator('#saveExtraIncomeButton').click();
+  await page.locator('#extraIncomeSheet').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(1000));
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1);
+  await page.locator('#salaryNextMonth').click();
+  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(3000));
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1);
   await context.close();
 });
 
@@ -971,6 +1028,89 @@ await run('salary months stay independent and duplicate months are blocked', asy
   assert.equal((await page.locator('#salaryMonthHint').textContent()).trim(), 'Future month');
   assert.equal(await page.locator('#salaryAmount').innerText(), 'No salary pool');
 
+  await context.close();
+});
+
+await run('page and month routes survive reload and browser back/forward', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  await page.goto(`${base}/#/salary/2026-10`, { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  assert.equal(await page.locator('#salaryMonthLabel').innerText(), 'October 2026');
+  await page.locator('#salaryNextMonth').click();
+  assert.equal(new URL(page.url()).hash, '#/salary/2026-11');
+  await page.locator('#salaryMonthPickerButton').click();
+  await page.locator('#monthPickerSheet').waitFor({ state: 'visible' });
+  await page.locator('#pickerYearSelect').selectOption('2026');
+  await page.locator('#pickerMonthSelect').selectOption('12');
+  await page.locator('#pickerGoButton').click();
+  await page.locator('#monthPickerSheet').waitFor({ state: 'hidden' });
+  assert.equal(new URL(page.url()).hash, '#/salary/2026-12');
+  await page.goBack();
+  await page.waitForFunction(() => location.hash === '#/salary/2026-11');
+  assert.equal(await page.locator('#salaryMonthLabel').innerText(), 'November 2026');
+  await page.goForward();
+  await page.waitForFunction(() => location.hash === '#/salary/2026-12');
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  assert.equal(await page.locator('#salaryMonthLabel').innerText(), 'December 2026');
+
+  await page.locator('[data-view="savings"]').click();
+  await page.locator('#savingsTabTotal').click();
+  assert.match(new URL(page.url()).hash, /^#\/savings\/total\/\d{4}-\d{2}$/);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  assert.equal(await page.locator('#savingsTabTotal').getAttribute('aria-selected'), 'true');
+
+  await page.locator('[data-view="expenses"]').click();
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'expensesTitle', 'page navigation moves focus to the heading');
+  const shortcut = await context.newPage();
+  watch(shortcut);
+  await shortcut.goto(`${base}/?view=salary&action=add-salary`, { waitUntil: 'networkidle' });
+  await shortcut.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  await shortcut.locator('#salarySheet').waitFor({ state: 'visible' });
+  assert.equal(new URL(shortcut.url()).search, '', 'legacy PWA launch parameters are consumed');
+  assert.match(new URL(shortcut.url()).hash, /^#\/salary\/\d{4}-\d{2}$/);
+  await context.close();
+});
+
+await run('salary summary export matches salary pools and last-month copy only prefills', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  await gotoApp(page);
+  const current = monthKeyNow();
+  const previous = shiftMonthKey(current, -1);
+  const next = shiftMonthKey(current, 1);
+  await addSalary(page, { amount: '50000', monthKey: previous });
+  await addExpense(page, { amount: '1000', description: 'Previous month expense', date: `${previous}-10` });
+  await addSalary(page, { amount: '50', monthKey: current });
+  await addExpense(page, { amount: '80', description: 'Current month overspend', date: `${current}-11` });
+  assert.match(await page.locator('#salaryMonthTrend').innerText(), new RegExp(`less than ${formatMonth(previous)}`, 'i'));
+
+  const csv = await downloadFrom(page, () => page.locator('#exportSalaryCsv').click());
+  assert.match(csv.filename, /^spendly-salary-summary-\d{4}-\d{2}-\d{2}\.csv$/);
+  assert.match(csv.text, /"Month","Salary \(INR\)","Expenses \(INR\)","Savings from salary \(INR\)","Remaining \(INR\)"/);
+  assert.match(csv.text, new RegExp(`"${formatMonth(previous)}","50000\\.00","1000\\.00","0\\.00","49000\\.00"`));
+  assert.match(csv.text, new RegExp(`"${formatMonth(current)}","50\\.00","80\\.00","0\\.00","-30\\.00"`));
+
+  await page.locator('#salaryMonthPickerButton').click();
+  await page.locator('#monthPickerSheet').waitFor({ state: 'visible' });
+  await page.locator('#pickerYearSelect').selectOption(next.slice(0, 4));
+  await page.locator('#pickerMonthSelect').selectOption(next.slice(5, 7));
+  await page.locator('#pickerGoButton').click();
+  await page.locator('#monthPickerSheet').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#copyPreviousSalaryButton').isVisible(), true);
+  assert.match(await page.locator('#copyPreviousSalaryButton').innerText(), /₹50\.00/);
+  const countBeforeCopy = (await dbSnapshot(page)).salaries.length;
+  await page.locator('#copyPreviousSalaryButton').click();
+  assert.equal(await page.locator('#salaryAmountInput').inputValue(), '50.00');
+  assert.equal((await dbSnapshot(page)).salaries.length, countBeforeCopy, 'prefill does not save a salary');
+  await page.locator('#closeSalarySheet').click();
+  await page.locator('#salarySheet').waitFor({ state: 'hidden' });
   await context.close();
 });
 
@@ -1304,14 +1444,21 @@ await run('legacy v2 transactions allocate by entry timestamp and unmatched rows
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(39800));
 
   await page.locator('[data-view="expenses"]').click();
+  assert.equal(await page.locator('#sourceReviewCard').isVisible(), true);
+  assert.match(await page.locator('#sourceReviewCount').innerText(), /1 expense needs review/);
+  await page.locator('#sourceReviewButton').click();
+  assert.equal(await page.locator('#historyList .entry').count(), 1, 'review mode contains only unresolved expenses');
   await page.locator('#historyList [data-edit="legacy-unmatched-expense"]').click();
   await page.locator('#expenseSheet').waitFor({ state: 'visible' });
   await page.locator('#paidFromSalary').check();
   await page.locator('#saveButton').click();
   await page.locator('#expenseSheet').waitFor({ state: 'hidden' });
+  await waitForToast(page, 'Expense updated');
   assert.match(await page.locator('#historyList [data-edit="legacy-unmatched-expense"]').innerText(), /Salary/);
   const explicitlyAssigned = await dbSnapshot(page);
   assert.equal(explicitlyAssigned.records.find(record => record.id === 'legacy-unmatched-expense').salaryRecordId, 'salary-nov');
+  assert.equal(explicitlyAssigned.records.find(record => record.id === 'legacy-unmatched-expense').allocationStatus, undefined);
+  assert.equal(await page.locator('#sourceReviewCard').isVisible(), false, 'review notice clears after an explicit assignment');
 
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
@@ -1320,6 +1467,37 @@ await run('legacy v2 transactions allocate by entry timestamp and unmatched rows
   assert.equal(reloaded.records.find(record => record.id === 'legacy-oct-pool').salaryRecordId, 'salary-oct');
   assert.equal(reloaded.savings.length, 2, 'migration does not duplicate savings rows');
   assert.equal(reloaded.savings.find(record => record.id === 'legacy-nov-saving').salaryRecordId, 'salary-nov');
+
+  await page.locator('[data-view="expenses"]').click();
+  await page.locator('#historyList [data-edit="legacy-unmatched-expense"]').click();
+  await page.locator('#paidFromOthers').check();
+  await page.locator('#saveButton').click();
+  await page.locator('#expenseSheet').waitFor({ state: 'hidden' });
+  await waitForToast(page, 'Expense updated');
+  assert.match(await page.locator('#historyList [data-edit="legacy-unmatched-expense"]').innerText(), /Others/);
+  const switchedToOthers = await dbSnapshot(page);
+  const externalExpense = switchedToOthers.records.find(record => record.id === 'legacy-unmatched-expense');
+  assert.equal(externalExpense.paymentSource, 'others');
+  assert.equal(externalExpense.salaryRecordId, null);
+  assert.equal(externalExpense.allocationStatus, undefined);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  await page.locator('[data-view="expenses"]').click();
+  assert.match(await page.locator('#historyList [data-edit="legacy-unmatched-expense"]').innerText(), /Others/);
+  assert.equal((await dbSnapshot(page)).records.find(record => record.id === 'legacy-unmatched-expense').paymentSource, 'others');
+
+  await page.locator('[data-view="savings"]').click();
+  await page.locator('#savingsTabTotal').click();
+  await page.locator('[data-savings-month="2026-09"]').click();
+  await page.locator('#savingsTotalMonthList [data-saving-edit="legacy-unmatched-saving"]').click();
+  await page.locator('#savingSourceInput').selectOption('salary');
+  await page.locator('#saveSavingButton').click();
+  await page.locator('#savingSheet').waitFor({ state: 'hidden' });
+  await waitForToast(page, 'Savings updated');
+  assert.match(await page.locator('#savingsTotalMonthList [data-saving-edit="legacy-unmatched-saving"]').innerText(), /From salary balance/);
+  const reviewedSavings = (await dbSnapshot(page)).savings.find(record => record.id === 'legacy-unmatched-saving');
+  assert.equal(reviewedSavings.salaryRecordId, 'salary-nov');
+  assert.equal(reviewedSavings.allocationStatus, undefined);
 
   await context.close();
 });
@@ -1413,6 +1591,35 @@ await run('layout is responsive on small phones and desktop', async () => {
   assert.equal(tileColumns, 1, 'desktop shows all four period tiles on one row');
   assert.ok((await desktop.locator('#dock').boundingBox()).width <= 400);
   await desktopContext.close();
+});
+
+await run('main pages and the expense sheet have no serious accessibility violations', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  await gotoApp(page);
+  const scan = async name => {
+    await page.waitForTimeout(400); // let the page's 360 ms entrance fade finish before checking text contrast
+    const result = await new AxeBuilder({ page }).include('#main').withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+    const serious = result.violations.filter(item => ['serious', 'critical'].includes(item.impact));
+    const summary = serious.flatMap(item => item.nodes.map(node => ({
+      rule: item.id,
+      target: node.target,
+      issue: node.failureSummary
+    })));
+    assert.deepEqual(summary, [], `${name} has serious or critical accessibility violations`);
+  };
+
+  await scan('Dashboard');
+  for (const view of ['expenses', 'salary', 'savings']) {
+    await page.locator(`[data-view="${view}"]`).click();
+    await scan(view);
+  }
+  await page.locator('#addExpenseButton').click();
+  await page.locator('#expenseSheet').waitFor({ state: 'visible' });
+  await scan('expense sheet');
+  await context.close();
 });
 
 await run('documentation screenshots', async () => {

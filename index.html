@@ -168,7 +168,7 @@
       <!-- Dashboard                                                          -->
       <!-- ================================================================== -->
       <section class="view" id="view-dashboard" aria-labelledby="dashboardTitle">
-        <h1 class="visually-hidden" id="dashboardTitle">Spendly dashboard</h1>
+        <h1 class="visually-hidden" id="dashboardTitle" tabindex="-1">Spendly dashboard</h1>
 
         <section class="hero" aria-labelledby="heroLabel">
           <div class="hero__glow" aria-hidden="true"></div>
@@ -250,6 +250,15 @@
           </div>
         </section>
 
+        <section class="onboarding" id="onboardingCard" aria-labelledby="onboardingTitle" hidden>
+          <h2 id="onboardingTitle">Start with these three steps</h2>
+          <ol>
+            <li><button type="button" data-goto="salary"><span>1</span><strong>Add your salary</strong><small>Set the balance you’ll use</small></button></li>
+            <li><button type="button" id="onboardingAddExpense"><span>2</span><strong>Track an expense</strong><small>Choose salary, savings or other funds</small></button></li>
+            <li><button type="button" id="onboardingAddSavings"><span>3</span><strong>Put some money aside</strong><small>Keep savings separate from spending</small></button></li>
+          </ol>
+        </section>
+
         <section class="section" id="glanceSection" aria-labelledby="glanceTitle">
           <div class="section__head">
             <h2 class="section__title" id="glanceTitle">Spending at a glance</h2>
@@ -327,7 +336,7 @@
       <section class="view" id="view-expenses" aria-labelledby="expensesTitle" hidden>
         <header class="page-head">
           <p class="eyebrow">Ledger</p>
-          <h1 class="page-head__title" id="expensesTitle">Expenses</h1>
+          <h1 class="page-head__title" id="expensesTitle" tabindex="-1">Expenses</h1>
           <p class="page-head__sub">Every expense, saved on this device.</p>
         </header>
 
@@ -339,6 +348,14 @@
             <span class="alltime-panel__range" id="allRange"></span>
           </div>
         </section>
+
+        <aside class="source-review" id="sourceReviewCard" aria-labelledby="sourceReviewTitle" hidden>
+          <div class="source-review__copy">
+            <strong id="sourceReviewTitle">Some expenses need a source</strong>
+            <span id="sourceReviewCount"></span>
+          </div>
+          <button class="source-review__button" type="button" id="sourceReviewButton" aria-pressed="false">Review sources</button>
+        </aside>
 
         <div class="search">
           <svg class="icon search__icon" aria-hidden="true"><use href="#i-search"></use></svg>
@@ -371,7 +388,7 @@
             </button>
             <button class="data__action" type="button" id="downloadBackup">
               <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-download"></use></svg></span>
-              <span class="data__text"><strong>Download backup</strong><small>Expenses, salary and savings as JSON</small></span>
+              <span class="data__text"><strong>Download backup</strong><small>Expenses, income and savings as JSON</small></span>
               <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
             </button>
             <button class="data__action" type="button" id="restoreBackup">
@@ -381,6 +398,17 @@
             </button>
             <input id="fileInput" type="file" accept="application/json,.json" hidden>
           </div>
+          <aside class="backup-reminder" id="backupReminder" aria-labelledby="backupReminderTitle" hidden>
+            <div class="backup-reminder__copy">
+              <strong id="backupReminderTitle">Keep a copy of your data</strong>
+              <span>Spendly is stored in this browser. Save a backup file in another place.</span>
+            </div>
+            <div class="backup-reminder__actions">
+              <button type="button" id="backupNow">Download backup</button>
+              <button type="button" id="dismissBackupReminder">Remind me later</button>
+            </div>
+          </aside>
+          <p class="storage-health" id="storageHealth">Your data is stored in this browser and is not uploaded.</p>
         </section>
 
         <p class="footnote">
@@ -394,7 +422,7 @@
       <section class="view" id="view-salary" aria-labelledby="salaryTitle" hidden>
         <header class="page-head">
           <p class="eyebrow">Income</p>
-          <h1 class="page-head__title" id="salaryTitle">Salary</h1>
+          <h1 class="page-head__title" id="salaryTitle" tabindex="-1">Salary</h1>
           <p class="page-head__sub">What you earned each month — one record per month.</p>
         </header>
 
@@ -432,6 +460,7 @@
           <p class="income-card__status" id="salaryStatus">No salary recorded for this month.</p>
 
           <div class="income-card__split" id="salarySplit" aria-live="polite"></div>
+          <p class="salary-trend" id="salaryMonthTrend" hidden></p>
 
           <div class="salary-transfer" id="salaryTransferPrompt" hidden>
             <p id="salaryTransferMessage"></p>
@@ -443,6 +472,7 @@
 
           <div class="income-card__actions">
             <button class="button button--primary button--block" type="button" id="salaryEditButton">Add salary</button>
+            <button class="button button--quiet button--block" type="button" id="copyPreviousSalaryButton" hidden></button>
             <button class="button button--quiet button--block" type="button" id="salaryClearButton" hidden>Remove salary</button>
           </div>
         </section>
@@ -453,6 +483,7 @@
             <span class="section__hint" id="salaryHistoryCount"></span>
           </div>
           <div id="salaryList"></div>
+          <button class="salary-export" type="button" id="exportSalaryCsv" hidden>Export salary summary</button>
         </section>
 
         <section class="section" aria-labelledby="extraIncomeTitle">
@@ -474,7 +505,7 @@
       <section class="view" id="view-savings" aria-labelledby="savingsTitle" hidden>
         <header class="page-head">
           <p class="eyebrow">Set aside</p>
-          <h1 class="page-head__title" id="savingsTitle">Savings</h1>
+          <h1 class="page-head__title" id="savingsTitle" tabindex="-1">Savings</h1>
           <p class="page-head__sub">Money you kept — separate from expenses.</p>
         </header>
 

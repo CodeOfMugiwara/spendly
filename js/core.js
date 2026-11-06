@@ -8,8 +8,8 @@
 
 export const STORAGE_KEY = 'spendly_expenses_v1';
 export const DB_NAME = 'spendly';
-// v1: expenses + meta. v2 adds salaries/savings, v3 relationship indexes and
-// v4 supports external funding labels without rewriting existing records.
+// v1: expenses + meta. v2 adds salaries/savings, v3 relationship indexes,
+// v4 supports external funding, and v5 adds the Extra Income store.
 export const DB_VERSION = 5;
 
 export const PERIODS = Object.freeze(['week', 'month', 'quarter', 'year']);

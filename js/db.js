@@ -9,6 +9,8 @@
  *   v2  + salaries (by_monthKey — unique), savings (by_monthKey, by_date,
  *       by_date_createdAt)
  *   v3  + expense salary/source indexes and savings ledger relationship indexes
+ *   v4  external funding labels use the existing relationship fields
+ *   v5  + extraIncome (by_date, by_createdAt)
  *
  * The v2 upgrade only *adds* stores. It never drops, clears or rewrites the
  * existing `expenses` store, so an upgrade cannot lose expense data.
@@ -84,8 +86,8 @@ export function openExpenseDB(factory = globalThis.indexedDB) {
     request.onupgradeneeded = event => {
       const db = request.result;
       try {
-        // Both helpers are idempotent, which covers fresh installs, v1 -> v2
-        // upgrades and a re-opened database where one store is already present.
+        // Helpers are idempotent, which covers fresh installs, older upgrades
+        // and a reopened database where a store already exists.
         ensureExpenseStores(db);
         if (event.oldVersion < 2 || !db.objectStoreNames.contains(SALARIES_STORE) ||
             !db.objectStoreNames.contains(SAVINGS_STORE)) {

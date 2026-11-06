@@ -130,3 +130,12 @@ Rules: one primary action per page; no page repeats another page’s main job; c
 - Savings retains its dedicated two-tab page. The summary separates contributions, salary transfers and withdrawals; transfer and withdrawal rows use clear ledger labels so savings movements are not mistaken for expenses.
 - The prior-salary transfer prompt is contextual to a real positive balance. **Not Now** leaves the amount in its original pool, and the Salary page retains a later transfer action for deferred balances.
 - Screens were regenerated for the updated balance hierarchy and source selector. Check the real device keyboard/safe-area combinations manually; browser viewport coverage cannot fully reproduce iOS Safari.
+
+## Addendum — 6 November 2026: source review, local backup status and navigation
+
+- The source-review panel uses a quiet mint surface and a single solid action. It belongs above the expense search so the user can resolve imported rows without changing the ledger layout or mistaking migration flags for a funding source.
+- Backup reminders sit inside **Your data**, use plain language about browser-local storage, and expose a 44 px minimum action area. The storage explanation remains visible even when the reminder is snoozed.
+- URL-backed page navigation focuses the destination heading; the dashboard uses the main landmark because its visible h1 is screen-reader-only.
+- The Salary comparison is a single muted line inside the existing income card. It compares calendar-date activity only and appears only when the previous month has data.
+- Savings rows show the salary and other-income amounts when a contribution used both. The existing single-line meta truncation keeps the row compact on phones; the button’s accessible name contains the full details.
+- The first-use guide is an opaque card with three direct actions. It stays below the monthly overview and disappears after salary has existed, without adding a modal tour.

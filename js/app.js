@@ -113,6 +113,7 @@ const state = {
   selectedPeriod: 'month',
   view: 'dashboard',
   search: '',
+  reviewExpensesOnly: false,
   editingExpenseId: null,
   editingSalaryId: null,
   editingSavingId: null,
@@ -127,6 +128,10 @@ const state = {
   savingEntry: false,
   toastTimer: null,
   searchTimer: null,
+  lastBackupAt: null,
+  backupReminderDismissedUntil: null,
+  storageMessage: 'Your data is stored in this browser and is not uploaded.',
+  onboardingDone: false,
   installPrompt: null,
   installDismissed: readPreference(INSTALL_DISMISSED_KEY),
   registration: null,
@@ -186,10 +191,18 @@ async function initData() {
     }
 
     await refreshAll();
+    state.lastBackupAt = await state.ledgerRepo.getMetadata('backup:last-download-request');
+    state.backupReminderDismissedUntil = await state.ledgerRepo.getMetadata('backup:reminder-dismissed-until');
+    state.onboardingDone = (await state.ledgerRepo.getMetadata('onboarding:completed')) === true;
+    const initialRoute = readRoute();
+    state.financeMonth = initialRoute.financeMonth;
+    state.salaryMonth = initialRoute.salaryMonth;
+    state.savingsTab = initialRoute.savingsTab;
+    state.savingsMonth = initialRoute.savingsMonth;
     state.ready = true;
     document.documentElement.dataset.appReady = 'true';
     render();
-    showView('dashboard');
+    showView(initialRoute.view, { historyMode: 'replace', focus: false });
     applyLaunchParams();
 
     if (migration.status === 'migrated' && migration.imported > 0) {
@@ -228,12 +241,39 @@ function showFatal(error) {
 
 async function requestPersistentStorage() {
   try {
-    if (!navigator.storage?.persist) return;
-    if (await navigator.storage.persisted()) return;
-    await navigator.storage.persist();
+    if (!navigator.storage) return;
+    let persistent = typeof navigator.storage.persisted === 'function'
+      ? await navigator.storage.persisted()
+      : null;
+    if (persistent === false && typeof navigator.storage.persist === 'function') {
+      persistent = await navigator.storage.persist();
+    }
+    let usage = null;
+    let quota = null;
+    if (typeof navigator.storage.estimate === 'function') {
+      const estimate = await navigator.storage.estimate();
+      usage = Number.isFinite(estimate.usage) ? estimate.usage : null;
+      quota = Number.isFinite(estimate.quota) ? estimate.quota : null;
+    }
+    state.storageMessage = storageMessage({ persistent, usage, quota });
+    renderBackupHealth();
   } catch {
     // Best effort. The app works without persistent-storage permission.
+    state.storageMessage = 'Your data stays in this browser. Download a backup to keep a separate copy.';
+    renderBackupHealth();
   }
+}
+
+function storageMessage({ persistent, usage, quota }) {
+  const size = bytes => bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const usageText = usage !== null && quota !== null
+    ? ` Using ${size(usage)} of about ${size(quota)} available.`
+    : '';
+  if (persistent === true) return `This browser is protecting Spendly’s local data from automatic cleanup.${usageText}`;
+  if (persistent === false) return `This browser may clear local data when space is low. Keep a backup file.${usageText}`;
+  return `Your data stays in this browser. Download a backup to keep a separate copy.${usageText}`;
 }
 
 async function refreshAll() {
@@ -251,7 +291,7 @@ async function refreshAll() {
 }
 
 function hasAnyData() {
-  return state.expenses.length > 0 || state.salaries.length > 0 || state.savings.length > 0;
+  return state.expenses.length > 0 || state.salaries.length > 0 || state.savings.length > 0 || state.extraIncome.length > 0;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -270,7 +310,46 @@ function render() {
   renderExpensesPage(summary);
   renderSalaryPage();
   renderSavingsPage();
+  renderBackupHealth();
+  renderOnboarding();
   renderInstallPrompt();
+}
+
+function markOnboardingComplete() {
+  if (state.onboardingDone) return;
+  state.onboardingDone = true;
+  void state.ledgerRepo?.setMetadata('onboarding:completed', true).catch(error => {
+    console.error('Could not save onboarding progress:', error);
+  });
+}
+
+function renderOnboarding() {
+  if (state.salaries.length) markOnboardingComplete();
+  $('onboardingCard').hidden = state.onboardingDone;
+}
+
+function renderBackupHealth() {
+  const records = state.expenses.length + state.salaries.length + state.savings.length + state.extraIncome.length;
+  const lastBackup = Date.parse(state.lastBackupAt ?? '');
+  const dismissedUntil = Date.parse(state.backupReminderDismissedUntil ?? '');
+  const due = records >= 10 && (!Number.isFinite(lastBackup) || Date.now() - lastBackup >= 30 * 86400000);
+  const dismissed = Number.isFinite(dismissedUntil) && dismissedUntil > Date.now();
+  $('backupReminder').hidden = !due || dismissed;
+  $('storageHealth').textContent = state.storageMessage;
+}
+
+async function recordBackupDownload() {
+  const backedUpAt = new Date().toISOString();
+  try {
+    await state.ledgerRepo.setMetadata('backup:last-download-request', backedUpAt);
+    state.lastBackupAt = backedUpAt;
+    state.backupReminderDismissedUntil = null;
+    renderBackupHealth();
+  } catch (error) {
+    console.error('Could not save the backup date:', error);
+    return false;
+  }
+  return true;
 }
 
 function amountMarkup(value) {
@@ -419,22 +498,49 @@ function renderRecent(recent) {
 
 function renderExpensesPage(summary) {
   const query = normalizeQuery(state.search);
+  const unresolved = state.expenses.filter(expense => expense.paymentSource === 'salary' &&
+    (!expense.salaryRecordId || expense.allocationStatus === 'needs_review'));
+  if (state.reviewExpensesOnly && unresolved.length === 0) state.reviewExpensesOnly = false;
+  const baseExpenses = state.reviewExpensesOnly ? unresolved : state.expenses;
   const matching = query
-    ? state.expenses.filter(expense => matchesQuery(expense, query))
-    : state.expenses;
+    ? baseExpenses.filter(expense => matchesQuery(expense, query))
+    : baseExpenses;
+
+  $('sourceReviewCard').hidden = unresolved.length === 0;
+  $('sourceReviewCount').textContent = `${unresolved.length} ${unresolved.length === 1 ? 'expense needs' : 'expenses need'} review`;
+  $('sourceReviewButton').textContent = state.reviewExpensesOnly ? 'Show all expenses' : 'Review sources';
+  $('sourceReviewButton').setAttribute('aria-pressed', String(state.reviewExpensesOnly));
 
   $('allTotal').innerHTML = amountMarkup(summary.all.total);
   $('allTotal').setAttribute('aria-label', formatMoney(summary.all.total));
   $('allCount').textContent = expenseWord(summary.all.count);
   $('allRange').textContent = summary.all.firstDate ? `Since ${formatMonth(summary.all.firstDate)}` : '';
   $('clearSearch').hidden = !query;
-  $('resultCount').textContent = query
+  $('resultCount').textContent = state.reviewExpensesOnly
+    ? `${matching.length} to review`
+    : query
     ? `${matching.length} found`
     : `${state.expenses.length} total`;
   $('resultCount').setAttribute('aria-live', 'polite');
 
   if (!matching.length) {
-    if (!state.expenses.length) {
+    if (state.reviewExpensesOnly && unresolved.length === 0) {
+      $('historyList').innerHTML = emptyMarkup({
+        icon: 'check',
+        title: 'All expense sources are clear',
+        text: 'Every salary-funded expense is linked to a salary pool.',
+        action: 'Show all expenses',
+        actionAttribute: 'data-clear-review="true"'
+      });
+    } else if (state.reviewExpensesOnly) {
+      $('historyList').innerHTML = emptyMarkup({
+        icon: 'search',
+        title: `No matches for “${query}”`,
+        text: 'Try a different description, date or amount.',
+        action: 'Clear search',
+        actionAttribute: 'data-clear-search="true"'
+      });
+    } else if (!state.expenses.length) {
       $('historyList').innerHTML = emptyMarkup({
         icon: 'wallet',
         title: 'No expenses yet',
@@ -536,7 +642,7 @@ function renderSalaryPage() {
 
   $('salaryMonthLabel').textContent = label;
   $('salaryMonthHint').textContent = financeMonthStatus(key);
-  $('salaryMonthPickerButton').setAttribute('aria-label', `Selected month: ${label}. Choose another month and year.`);
+  $('salaryMonthPickerButton').setAttribute('aria-label', `Selected month: ${label}. ${$('salaryMonthHint').textContent}. Choose another month and year.`);
   $('salaryNowRow').hidden = key === currentMonthKey();
 
   $('salaryBalanceLabel').textContent = 'Remaining balance';
@@ -544,7 +650,8 @@ function renderSalaryPage() {
   $('salaryAmount').classList.toggle('is-unset', !record);
   $('salaryAmount').classList.toggle('is-negative', Boolean(record && finance.remainingPaise < 0));
   $('salaryAmount').setAttribute('aria-label', record ? `Remaining balance ${formatMoney(finance.remaining)}` : 'No salary pool for this month');
-  const extraBalance = state.extraIncome.reduce((sum, entry) => sum + extraIncomeRemaining(entry, state.savings), 0);
+  const monthExtraIncome = state.extraIncome.filter(entry => entry.date.slice(0, 7) === key);
+  const extraBalance = monthExtraIncome.reduce((sum, entry) => sum + extraIncomeRemaining(entry, state.savings), 0);
   $('extraIncomeBalance').textContent = formatMoney(extraBalance);
 
   $('salaryNotes').hidden = !record?.notes;
@@ -567,6 +674,15 @@ function renderSalaryPage() {
       <span>Expenses</span>
       <strong>${escapeHTML(record ? formatMoney(finance.expenseTotal) : '—')}</strong>
     </div>`;
+
+  renderSalaryMonthTrend(key);
+
+  const previousSalary = findSalaryForMonth(state.salaries, shiftMonth(key, -1));
+  const copyButton = $('copyPreviousSalaryButton');
+  copyButton.hidden = Boolean(record || !previousSalary);
+  copyButton.textContent = previousSalary
+    ? `Use ${formatMoney(previousSalary.amount)} from ${formatMonthKey(previousSalary.monthKey)}`
+    : '';
 
   const activeSalary = findActiveSalary(state.salaries);
   const hasNewerSalary = Boolean(record && activeSalary && activeSalary.id !== record.id && Date.parse(activeSalary.createdAt) > Date.parse(record.createdAt));
@@ -596,11 +712,48 @@ function renderSalaryPage() {
         action: 'Add this month’s salary',
         actionAttribute: 'data-empty-salary="true"'
       });
-  const extraTotal = state.extraIncome.reduce((sum, entry) => sum + Number(entry.amount), 0);
+  $('exportSalaryCsv').hidden = state.salaries.length === 0;
+  const extraTotal = monthExtraIncome.reduce((sum, entry) => sum + Number(entry.amount), 0);
   $('extraIncomeTotal').textContent = `${formatMoney(extraTotal)} received`;
-  $('extraIncomeList').innerHTML = state.extraIncome.length
-    ? `<div class="list-card">${[...state.extraIncome].sort((a, b) => b.date.localeCompare(a.date)).map(extraIncomeRowMarkup).join('')}</div>`
-    : `<p class="savings-month__empty">No extra income recorded yet.</p>`;
+  $('extraIncomeList').innerHTML = monthExtraIncome.length
+    ? `<div class="list-card">${[...monthExtraIncome].sort((a, b) => b.date.localeCompare(a.date)).map(extraIncomeRowMarkup).join('')}</div>`
+    : `<p class="savings-month__empty">No other income added in ${escapeHTML(label)}.</p>`;
+}
+
+function renderSalaryMonthTrend(monthKey) {
+  const previousKey = shiftMonth(monthKey, -1);
+  const currentExpenses = state.expenses.filter(expense => expense.date.slice(0, 7) === monthKey);
+  const previousExpenses = state.expenses.filter(expense => expense.date.slice(0, 7) === previousKey);
+  const currentSavings = savingsForMonth(state.savings, monthKey);
+  const previousSavings = savingsForMonth(state.savings, previousKey);
+  const parts = [];
+
+  if (previousExpenses.length) {
+    const difference = currentExpenses.reduce((sum, item) => sum + Math.round(item.amount * 100), 0) -
+      previousExpenses.reduce((sum, item) => sum + Math.round(item.amount * 100), 0);
+    parts.push(difference === 0
+      ? `Spending was the same as ${formatMonthKey(previousKey)}`
+      : `Spent ${formatMoney(fromPaise(Math.abs(difference)))} ${difference > 0 ? 'more' : 'less'} than ${formatMonthKey(previousKey)}`);
+  }
+
+  if (previousSavings.length) {
+    const difference = sumSavingsPaise(currentSavings) - sumSavingsPaise(previousSavings);
+    parts.push(difference === 0
+      ? `Savings activity matched ${formatMonthKey(previousKey)}`
+      : `Saved ${formatMoney(fromPaise(Math.abs(difference)))} ${difference > 0 ? 'more' : 'less'} than ${formatMonthKey(previousKey)}`);
+  }
+
+  const trend = $('salaryMonthTrend');
+  trend.textContent = parts.join(' · ');
+  trend.hidden = parts.length === 0;
+}
+
+function usePreviousSalary() {
+  const previous = findSalaryForMonth(state.salaries, shiftMonth(state.salaryMonth, -1));
+  if (!previous || findSalaryForMonth(state.salaries, state.salaryMonth)) return;
+  openSalarySheet(null, state.salaryMonth);
+  $('salaryAmountInput').value = Number(previous.amount).toFixed(2);
+  $('salaryNotesInput').value = previous.notes ?? '';
 }
 
 function extraIncomeRowMarkup(record) {
@@ -614,7 +767,7 @@ function openExtraIncomeSheet(recordId = null) {
   state.editingExtraIncomeId = record?.id ?? null;
   $('extraIncomeSheetTitle').textContent = record ? 'Edit extra income' : 'Add extra income';
   $('extraIncomeAmount').value = record ? Number(record.amount).toFixed(2) : '';
-  $('extraIncomeDate').value = record?.date ?? localToday();
+  $('extraIncomeDate').value = record?.date ?? defaultSavingDate(state.salaryMonth);
   $('extraIncomeDate').max = localToday();
   $('extraIncomeSource').value = record?.source ?? 'freelancing';
   $('extraIncomeDescription').value = record?.description ?? '';
@@ -788,7 +941,15 @@ function savingRowMarkup(record) {
   const safeId = escapeHTML(record.id);
   const type = record.type ?? 'contribution';
   const title = record.description ? escapeHTML(record.description) : type === 'salary_balance_transfer' ? 'Salary balance transfer' : type === 'withdrawal' ? 'Savings withdrawal' : type === 'external_contribution' ? `${record.sourceType ?? 'Other'} added` : 'Savings contribution';
-  const sourceLabel = type === 'salary_balance_transfer' ? 'From salary balance' : type === 'withdrawal' ? 'Used for expense' : type === 'external_contribution' ? (record.sourceType ?? 'other') : record.allocationStatus === 'needs_review' ? 'Salary source needs review' : 'From salary balance';
+  let sourceLabel = type === 'salary_balance_transfer' ? 'From salary balance' : type === 'withdrawal' ? 'Used for expense' : type === 'external_contribution' ? (record.sourceType ?? 'other') : record.allocationStatus === 'needs_review' ? 'Salary source needs review' : 'From salary balance';
+  if (type === 'contribution' && Array.isArray(record.extraIncomeAllocations) && record.extraIncomeAllocations.length) {
+    const extraIncomePaise = record.extraIncomeAllocations.reduce((sum, item) => sum + item.amountPaise, 0);
+    const salaryPaise = Number.isSafeInteger(record.salaryAllocationPaise) ? record.salaryAllocationPaise : 0;
+    sourceLabel = [
+      salaryPaise ? `Salary ${formatMoney(fromPaise(salaryPaise))}` : '',
+      extraIncomePaise ? `Other income ${formatMoney(fromPaise(extraIncomePaise))}` : ''
+    ].filter(Boolean).join(' + ');
+  }
   const meta = `${escapeHTML(formatDate(record.date))} · ${sourceLabel}`;
   const amount = escapeHTML(formatMoney(record.amount));
   const signedAmount = type === 'withdrawal' ? `−${amount}` : `+${amount}`;
@@ -827,8 +988,9 @@ function renderSavingsTab() {
 /* Views and months                                                           */
 /* -------------------------------------------------------------------------- */
 
-function showView(view) {
+function showView(view, { historyMode = 'push', focus = true } = {}) {
   if (!VIEWS.includes(view)) return;
+  const changedView = state.view !== view;
   state.view = view;
   for (const name of VIEWS) $(`view-${name}`).hidden = name !== view;
 
@@ -850,7 +1012,14 @@ function showView(view) {
     renderSavingsPage();
   }
 
-  window.scrollTo(0, 0);
+  if (changedView) window.scrollTo(0, 0);
+  if (historyMode !== 'none') writeRoute(historyMode);
+  if (focus && changedView) {
+    const heading = view === 'dashboard' ? $('main') : $(`${view}Title`);
+    if (heading) {
+      heading.focus({ preventScroll: true });
+    }
+  }
 }
 
 function selectPeriod(period) {
@@ -864,11 +1033,13 @@ function selectPeriod(period) {
 function shiftFinanceMonth(delta) {
   state.financeMonth = shiftMonth(state.financeMonth, delta);
   renderFinance();
+  writeRoute('replace');
 }
 
 function shiftSalaryMonth(delta, animate = true) {
   state.salaryMonth = shiftMonth(state.salaryMonth, delta);
   renderSalaryPage();
+  writeRoute('replace');
   if (animate) pulseMonthChange(delta);
 }
 
@@ -878,6 +1049,7 @@ function setSalaryMonth(monthKey) {
   const direction = monthKey > state.salaryMonth ? 1 : -1;
   state.salaryMonth = monthKey;
   renderSalaryPage();
+  writeRoute('push');
   pulseMonthChange(direction);
 }
 
@@ -938,12 +1110,56 @@ function shiftSavingsMonth(delta) {
     total: sumSavings(state.savings),
     currentKey: currentMonthKey()
   });
+  writeRoute('replace');
 }
 
 function selectSavingsTab(tab) {
   if (tab !== 'month' && tab !== 'total') return;
+  if (state.savingsTab === tab) return;
   state.savingsTab = tab;
   renderSavingsTab();
+  writeRoute('push');
+}
+
+function readRoute() {
+  const parts = window.location.hash.replace(/^#\/?/, '').split('/');
+  const view = VIEWS.includes(parts[0]) ? parts[0] : 'dashboard';
+  const month = value => isMonthKey(value) ? value : currentMonthKey();
+  return {
+    view,
+    financeMonth: view === 'dashboard' ? month(parts[1]) : state.financeMonth,
+    salaryMonth: view === 'salary' ? month(parts[1]) : state.salaryMonth,
+    savingsTab: view === 'savings' && parts[1] === 'total' ? 'total' : 'month',
+    savingsMonth: view === 'savings' ? month(parts[2]) : state.savingsMonth
+  };
+}
+
+function routeUrl() {
+  const route = state.view === 'dashboard'
+    ? `#/dashboard/${state.financeMonth}`
+    : state.view === 'salary'
+      ? `#/salary/${state.salaryMonth}`
+      : state.view === 'savings'
+        ? `#/savings/${state.savingsTab}/${state.savingsMonth}`
+        : '#/expenses';
+  return `${window.location.pathname}${window.location.search}${route}`;
+}
+
+function writeRoute(mode = 'replace') {
+  const url = routeUrl();
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (url === current) return;
+  if (mode === 'push') window.history.pushState({ spendly: true }, '', url);
+  else window.history.replaceState({ spendly: true }, '', url);
+}
+
+function restoreRouteFromLocation() {
+  const route = readRoute();
+  state.financeMonth = route.financeMonth;
+  state.salaryMonth = route.salaryMonth;
+  state.savingsTab = route.savingsTab;
+  state.savingsMonth = route.savingsMonth;
+  showView(route.view, { historyMode: 'none', focus: true });
 }
 
 function applyLaunchParams() {
@@ -951,15 +1167,20 @@ function applyLaunchParams() {
   const view = params.get('view');
   const action = params.get('action');
 
-  if (view === 'history') showView('expenses');
-  else if (VIEWS.includes(view)) showView(view);
+  if (view === 'history') showView('expenses', { historyMode: 'replace', focus: false });
+  else if (VIEWS.includes(view)) showView(view, { historyMode: 'replace', focus: false });
 
   if (action === 'add') openExpenseSheet();
   else if (action === 'add-salary') openSalarySheet();
   else if (action === 'add-saving') openSavingSheet();
 
   if (view || action) {
-    window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+    const remaining = new URLSearchParams(window.location.search);
+    remaining.delete('view');
+    remaining.delete('action');
+    const remainingQuery = remaining.toString();
+    const search = remainingQuery ? `?${remainingQuery}` : '';
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${search}${window.location.hash}`);
   }
 }
 
@@ -1257,6 +1478,7 @@ async function handleSalarySubmit(event) {
     await refreshAll();
     state.salaryMonth = input.monthKey;
     state.financeMonth = input.monthKey;
+    writeRoute('replace');
     if (isSameDialogSession($('salarySheet'), session)) closeSalarySheet();
     render();
     showToast(wasEditing ? 'Salary updated.' : 'Salary saved.');
@@ -1399,6 +1621,7 @@ async function handleSavingSubmit(event) {
 
     await refreshAll();
     if (saved?.monthKey) state.savingsMonth = saved.monthKey;
+    writeRoute('replace');
     if (isSameDialogSession($('savingSheet'), session)) closeSavingSheet();
     render();
     showToast(wasEditing ? 'Savings updated' : input.sourceType === 'salary' ? 'Salary contribution saved' : `${input.sourceType[0].toUpperCase()}${input.sourceType.slice(1)} added to savings`, { tone: 'success' });
@@ -1657,6 +1880,28 @@ function exportCsv() {
   showToast('CSV downloaded.');
 }
 
+function exportSalaryCsv() {
+  const rows = [
+    ['Month', 'Salary (INR)', 'Expenses (INR)', 'Savings from salary (INR)', 'Remaining (INR)'],
+    ...[...state.salaries].sort((a, b) => a.monthKey.localeCompare(b.monthKey)).map(salary => {
+      const pool = computeSalaryPool(salary, state.expenses, state.savings);
+      return [
+        formatMonthKey(salary.monthKey),
+        Number(salary.amount).toFixed(2),
+        pool.expenseTotal.toFixed(2),
+        fromPaise(pool.contributionPaise + pool.transferPaise).toFixed(2),
+        pool.remaining.toFixed(2)
+      ];
+    })
+  ];
+  const csv = rows.map(row => row.map(csvCell).join(',')).join('\r\n');
+  downloadBlob(
+    new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' }),
+    `spendly-salary-summary-${localToday()}.csv`
+  );
+  showToast('Salary summary downloaded.');
+}
+
 function snapshotData() {
   return {
     expenses: state.expenses.map(record => ({ ...record })),
@@ -1778,7 +2023,9 @@ async function handleRestoreFile(file) {
             try {
               downloadBackup(`spendly-before-restore-${localToday()}.json`, snapshot);
             } catch (error) {
-              console.warn('Could not create the safety backup:', error);
+              console.error('Could not create the safety backup:', error);
+              showToast('A safety copy could not be downloaded, so nothing was replaced.', { tone: 'error', duration: 7000 });
+              return;
             }
 
             try {
@@ -2145,6 +2392,8 @@ function applyUpdate() {
 /* -------------------------------------------------------------------------- */
 
 function bindEvents() {
+  window.addEventListener('popstate', restoreRouteFromLocation);
+
   $('periodTiles').addEventListener('click', event => {
     const tile = event.target.closest('[data-period]');
     if (tile) selectPeriod(tile.dataset.period);
@@ -2177,11 +2426,19 @@ function bindEvents() {
         $('search').value = '';
         renderExpensesPage(summarize(state.expenses, new Date()));
         $('search').focus();
+        return;
+      }
+
+      if (target.closest('[data-clear-review]')) {
+        state.reviewExpensesOnly = false;
+        renderExpensesPage(summarize(state.expenses, new Date()));
       }
     });
   }
 
   $('addExpenseButton').addEventListener('click', () => openExpenseSheet());
+  $('onboardingAddExpense').addEventListener('click', () => openExpenseSheet());
+  $('onboardingAddSavings').addEventListener('click', () => openSavingSheet());
   for (const source of document.querySelectorAll('input[name="paymentSource"]')) {
     source.addEventListener('change', () => updateExpenseSourceOptions());
   }
@@ -2207,6 +2464,8 @@ function bindEvents() {
   $('salaryNextMonth').addEventListener('click', () => shiftSalaryMonth(1));
   $('salaryMonthPickerButton').addEventListener('click', openMonthPicker);
   $('salaryCurrentMonth').addEventListener('click', () => setSalaryMonth(currentMonthKey()));
+  $('copyPreviousSalaryButton').addEventListener('click', usePreviousSalary);
+  $('exportSalaryCsv').addEventListener('click', exportSalaryCsv);
 
   $('closeMonthPicker').addEventListener('click', closeMonthPicker);
   $('monthPickerForm').addEventListener('submit', handleMonthPickerSubmit);
@@ -2332,6 +2591,7 @@ function bindEvents() {
       total: sumSavings(state.savings),
       currentKey: currentMonthKey()
     });
+    writeRoute('push');
   });
 
   $('search').addEventListener('input', event => {
@@ -2351,10 +2611,40 @@ function bindEvents() {
     $('search').focus();
   });
 
+  $('sourceReviewButton').addEventListener('click', () => {
+    state.reviewExpensesOnly = !state.reviewExpensesOnly;
+    if (state.reviewExpensesOnly) {
+      state.search = '';
+      $('search').value = '';
+      $('clearSearch').hidden = true;
+    }
+    renderExpensesPage(summarize(state.expenses, new Date()));
+  });
+
   $('exportCsv').addEventListener('click', exportCsv);
-  $('downloadBackup').addEventListener('click', () => {
-    downloadBackup();
-    showToast('Backup downloaded.');
+  $('downloadBackup').addEventListener('click', async () => {
+    try {
+      downloadBackup();
+      const recorded = await recordBackupDownload();
+      showToast(recorded ? 'Backup downloaded.' : 'Backup downloaded, but its date could not be saved.', {
+        tone: recorded ? 'success' : 'warning', duration: recorded ? 2800 : 5000
+      });
+    } catch (error) {
+      console.error('Could not download the backup:', error);
+      showToast('Couldn’t download the backup. Try again.', { tone: 'error' });
+    }
+  });
+  $('backupNow').addEventListener('click', () => $('downloadBackup').click());
+  $('dismissBackupReminder').addEventListener('click', async () => {
+    const until = new Date(Date.now() + 30 * 86400000).toISOString();
+    try {
+      await state.ledgerRepo.setMetadata('backup:reminder-dismissed-until', until);
+      state.backupReminderDismissedUntil = until;
+      renderBackupHealth();
+    } catch (error) {
+      console.error('Could not dismiss the backup reminder:', error);
+      showToast('Couldn’t save that reminder setting.', { tone: 'error' });
+    }
   });
   $('restoreBackup').addEventListener('click', () => $('fileInput').click());
   $('fileInput').addEventListener('change', event => {

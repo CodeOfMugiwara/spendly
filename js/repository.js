@@ -582,6 +582,18 @@ export class FinancialLedgerRepository {
     this.makeId = options.makeId ?? defaultMakeId;
   }
 
+  getMetadata(key) {
+    return this.#transaction(['meta'], 'readonly', ({ snapshots }) => (
+      snapshots.meta.find(record => record.key === key)?.value ?? null
+    ));
+  }
+
+  setMetadata(key, value) {
+    return this.#transaction(['meta'], 'readwrite', ({ collections }) => {
+      collections.meta.put({ key, value });
+    });
+  }
+
   #transaction(stores, mode, operation) {
     return new Promise((resolve, reject) => {
       let transaction;
@@ -845,10 +857,11 @@ export class FinancialLedgerRepository {
         : (existing.paymentSource === 'savings' ? activeSalary.id : existing.salaryRecordId ?? activeSalary.id);
       const expense = {
         ...existing, ...checked.value, paymentSource: source, salaryRecordId,
-        ...(salaryRecordId ? { allocationStatus: undefined } : {}),
+        allocationStatus: undefined,
         id: existing.id, createdAt: existing.createdAt, updatedAt: timestamp
       };
-      if (expense.allocationStatus === undefined) delete expense.allocationStatus;
+      // A saved source is an explicit resolution, including Savings and Others.
+      delete expense.allocationStatus;
 
       if (source === 'savings') {
         const balance = computeSavingsBalance(snapshots.savings);
@@ -960,6 +973,7 @@ export class FinancialLedgerRepository {
       const activeSalary = findActiveSalary(snapshots.salaries);
       if (sourceType === 'salary' && !activeSalary) throw new NoActiveSalaryError();
       const record = { ...existing, ...checked.value, id, type, sourceType: type === 'salary_balance_transfer' ? undefined : sourceType, salaryRecordId: type === 'salary_balance_transfer' ? existing.salaryRecordId : sourceType === 'salary' ? (existing.salaryRecordId ?? activeSalary.id) : undefined, createdAt: existing.createdAt, updatedAt: timestamp };
+      delete record.allocationStatus;
       if (type === 'external_contribution') {
         delete record.salaryAllocationPaise;
         delete record.extraIncomeAllocations;

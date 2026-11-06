@@ -120,3 +120,15 @@ Final verification after adding Others expenses, external Gift/Bonus/Other savin
 ## Addendum — 6 November 2026: extra-income coverage
 
 Browser coverage now verifies separate extra-income balance, salary-first allocation and persisted split links. Final suite counts follow after all restore and regression cases complete.
+
+## Addendum — 6 November 2026: Spendly 3.5.0 final verification
+
+- `npm test`: 57/57 unit tests passed.
+- `npm run test:e2e`: 23/23 browser scenarios passed, including source edits that persist across reload, backup reminder and snooze metadata, route reload/Back/Forward and PWA shortcuts, salary export and prefill, and savings allocation history.
+- Axe found no serious or critical accessibility violations on Dashboard, Expenses, Salary, Savings, or the expense sheet.
+- `npm install` reported 0 vulnerabilities. Documentation screenshots were regenerated for the updated screens.
+- Manual checks still include VoiceOver on real iOS, safe areas with the keyboard open, and restore on a second browser origin.
+
+## Addendum — 6 November 2026: month-scoped Other income
+
+The Salary browser scenario now verifies that the Other income balance, received total and history only include entries dated in the selected month. When adding income while viewing a past month, its default date falls in that selected month. The 23 browser scenarios passed, including serious/critical accessibility checks; `npm test` passed 57/57.

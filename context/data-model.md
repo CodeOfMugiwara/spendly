@@ -165,3 +165,22 @@ Version 4 preserves payment source, salary IDs, savings transaction types and ex
 IndexedDB v5 adds a separate `extraIncome` object store. Extra income balance is derived as income records minus allocation amounts on savings contributions. A single contribution record stores `salaryAllocationPaise` and `extraIncomeAllocations`; regular salary is consumed first and extra income fills only the remainder. Deleting or reducing allocated income is blocked. Older savings contributions without split fields retain their original salary allocation.
 
 JSON backup v5 includes extra income and funding allocation relationships. Older backups without that collection leave existing Extra Income untouched. Salary and extra income remain separate in all salary card calculations.
+
+## Addendum — 6 November 2026: version 3.5 local metadata
+
+No IndexedDB schema change was needed. The existing `meta` store now also holds:
+
+| Key | Value | Purpose |
+|---|---|---|
+| `backup:last-download-request` | ISO timestamp | When the user last started a JSON backup download; the browser cannot confirm the file was kept. |
+| `backup:reminder-dismissed-until` | ISO timestamp | Hides the backup reminder until this date, normally 30 days. |
+| `onboarding:completed` | `true` | Keeps the first-use dashboard guide dismissed after a salary has existed, including after restore. |
+
+An explicit expense source save clears `allocationStatus`, whether the selected source is Salary, Savings or Others. An explicit source choice on a reviewable savings contribution also clears its old review flag. Salary assignment still links to the active pool when the historical record has no safe salary ID. Existing timestamps and transaction dates are preserved.
+
+The v5 JSON backup shape and relationship checks are unchanged. Backup reminder metadata is local app state and is not included in backups.
+
+
+## Addendum — 6 November 2026: Other income month display
+
+The Salary page filters the Other income balance, received total and history by the month in each record's date. The add form defaults to a date within the selected Salary month (or today when selecting a future month). This is a display rule only: savings allocation can still use all unallocated income records, regardless of month.

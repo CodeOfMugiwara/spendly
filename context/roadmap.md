@@ -50,3 +50,17 @@ Implemented the source-aware salary/savings ledger in Spendly 3.2. Salary record
 The project now supports explicit later transfer of a previous pool's positive remainder into Savings. Transfer and withdrawal rows remain distinct from ordinary contributions and expenses. Salary deletion is blocked while linked activity exists. No automatic carry-forward or split payment was added.
 
 The upgrade keeps IndexedDB local and offline, uses additive v3 indexes, migrates legacy allocation using transaction timestamps, flags ambiguous rows for review, and writes backup v4. The corresponding candidate was not on the roadmap, so this addendum records the shipped scope without removing future items.
+
+## Addendum — 6 November 2026: Spendly 3.5 reliability and navigation
+
+Shipped in this pass:
+
+- A phone-friendly expense source review filter and status cleanup after explicit expense or savings source assignment.
+- A backup reminder after 10 records, a persisted 30-day snooze, local-storage status when supported, and a recorded backup-download request.
+- Hash routes for Dashboard month, Salary month, Savings tab/month and Expenses, including reload and Back/Forward handling. PWA query launch links remain supported.
+- Salary-pool CSV export, previous-month salary prefill, transaction-date month comparisons, savings allocation labels, and a compact first-use guide.
+- Axe checks for the main pages and expense sheet, plus focused browser scenarios for source persistence and routes.
+
+No IndexedDB or JSON backup version change was needed. The service-worker cache is v18 and the app version is 3.5.1. Restore continues to use validated Replace with a safety download and Undo. Merge restore remains a future option until conflict reporting and linked-record rules are explicitly designed.
+
+Still gated: savings/salary history search and filters, a savings CSV export, sparkline, render-path splitting, and cloud or account features. Measure actual history and performance needs before taking those on.

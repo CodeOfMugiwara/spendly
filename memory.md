@@ -317,6 +317,26 @@ One assertion expected ₹47,500 after a reload, but the savings entry had been 
 - Savings history and totals distinguish salary contributions, transfers, external additions, and withdrawals. Expense-linked withdrawals remain atomic.
 - Toasts use one shared surface with tone variants, adaptive duration, safe-area top positioning, manual dismissal, duplicate suppression and success after persistence.
 - IndexedDB version 4 is additive; no store is reset. Existing unknown sources keep their prior salary interpretation unless the user edits them.
-- Verification in progress for unit and browser suites; final result is reported with this delivery.
+- Final verification is recorded immediately below for the 3.3 release.
 
 Verification update for version 3.3.0: 57 unit tests and 18 browser scenarios pass. New browser coverage confirms Others expenses affect expense totals but no financial pool, and external additions affect Savings only.
+
+## 11. Version 3.5.0 — 6 November 2026 — Source review, backup health and navigation
+
+**Why:** A user reported that changing an existing expense source on a phone showed a success message without a clear source change, and multiple older entries needed source review. The plan also identified missing browser history, backup reminders and salary-history exports.
+
+- The Expenses page now shows a source-review count and filters directly to unresolved salary-funded rows. Saving an explicit expense source clears `allocationStatus`; explicit savings-source edits clear the stale review marker too.
+- Added browser coverage for correcting a migrated expense to Salary and then Others, verifying persisted data and labels after reload. Added a savings review-resolution check.
+- The `meta` store records backup-download requests, a 30-day reminder snooze and onboarding completion. Spendly displays persistent-storage and quota information when the browser supports those APIs. Restore still validates and replaces collections with a safety copy and Undo; it stops if a safety download cannot start. Merge restore was deferred pending clear conflict rules.
+- Hash URLs preserve page and selected month/tab. Month arrows replace the current route; page/tab and explicit month selection create history entries. Back/Forward restore state, and deliberate page changes move focus to the page landmark/heading. PWA `?view=` and `?action=` links continue to work.
+- Salary page adds a separate salary-pool CSV, previous-month salary prefill, and calendar-date activity comparisons. Savings contribution rows show the salary/Other income split. The dashboard has a short first-use guide that stays dismissed after a salary exists.
+- Added serious/critical axe checks for each page and the expense sheet. Did not change IndexedDB v5 or backup v5; bumped app version to 3.5.0 and service-worker cache to v17.
+- Updated README and architecture/data-model/design-system/testing/roadmap context with the current features and version facts.
+
+Verification: `npm test` passed 57/57; `npm run test:e2e` passed 23/23, including serious/critical axe checks across all pages and the expense sheet. `npm install` reported 0 vulnerabilities.
+
+## 12. Version 3.5.1 — 6 November 2026 — Month-scoped Other income
+
+The Salary page now filters the Other income balance, received total and history rows to the selected month using the income record's date. Savings contributions still draw from all available Extra Income across months. Added browser regression coverage for month switching; bumped app to 3.5.1 and service-worker cache to v18.
+
+Verification for 3.5.1: 57 unit tests and 23 browser scenarios pass. The month-switch regression confirms Other income appears only in its dated month and the add form defaults to the selected month. Axe reports no serious or critical violations on the main pages or expense sheet.

@@ -2,11 +2,11 @@
 
 ## Extra income and combined savings
 
-Spendly keeps Extra Income in its own IndexedDB store and shows its unallocated balance separately on the Salary page. Savings contributions use regular salary first, then allocate only the remaining amount from extra income. Each contribution remains a single savings credit with paise-level salary and extra-income allocation details. Used extra-income records cannot be deleted or reduced below their allocated amount.
+Spendly keeps Extra Income in its own IndexedDB store and shows the balance, received total and entries for the selected Salary month only, based on each income record date. Savings contributions use regular salary first, then allocate only the remaining amount from extra income. Each contribution remains a single savings credit with paise-level salary and extra-income allocation details. Used extra-income records cannot be deleted or reduced below their allocated amount.
 
 Extra Income supports freelancing, part-time, bonus and other sources. Gifts, bonuses and other manual Savings additions continue to be independent of both income pools. Expense sources and the four-page navigation are unchanged.
 
-The current implementation is Spendly 3.4.0, IndexedDB v5, service-worker cache v12, and JSON backup v5. Older backups remain supported; an older backup without an `extraIncome` collection leaves local Extra Income untouched.
+The current implementation is Spendly 3.5.1, IndexedDB v5, service-worker cache v18, and JSON backup v5. Older backups remain supported; an older backup without an `extraIncome` collection leaves local Extra Income untouched.
 
 
 A private, offline-first salary, expense and savings tracker built with plain HTML, CSS and JavaScript. No build step, no account, no backend, no API keys.
@@ -20,12 +20,24 @@ A private, offline-first salary, expense and savings tracker built with plain HT
 
 <p align="center"><em>Sample data shown. The interface is designed for iPhone and also works on desktop.</em></p>
 
-## What changed in 3.3
+## What changed in 3.3 and 3.4
 
 - Expense sources now include **Salary Balance**, **Savings**, and **Others**. Others are included in expense analytics but never deducted from either tracked balance.
 - Savings can receive salary contributions or independent Gift, Bonus and Other additions. External additions never affect salary pools and are broken out in savings activity/history.
 - The shared toast system provides success, error, warning and info variants, safe-area-aware top placement, manual dismissal and duplicate suppression.
-- IndexedDB v5 adds an Extra Income store without destructive changes. Backup format v5 preserves extra-income records and savings funding allocations.
+- Extra Income is stored separately. Savings contributions use salary first, then Extra Income, and backup format v5 preserves each allocation.
+
+## What changed in 3.5.1
+
+- Other income appears only in the month recorded. Adding income from a past month defaults its date to that selected month.
+
+## What changed in 3.5
+
+- Expense history can filter to older transactions that need a funding source review. Assigning a source clears the review status and remains saved after reload.
+- Backup reminders can be snoozed. Spendly shows local storage and persistence details when the browser provides them.
+- Page, month and Savings tab choices now survive reload and work with browser Back/Forward. Existing PWA shortcut parameters still work.
+- Salary history has a salary-pool CSV export, month comparisons and a button to prefill a new month from the previous salary.
+- First-time users see a short dashboard guide until a salary is saved. Savings contribution rows show salary and other-income funding portions.
 
 ## What changed in 3.2
 
@@ -58,7 +70,9 @@ Spendly grew from a single-page expense tracker into a personal finance tracker 
 - Add, edit and delete expenses with Indian Rupee formatting (`en-IN`, ₹).
 - Month-grouped history with subtotals, search across description/date/month/amount, and Undo after delete.
 - CSV export (expenses only) for Excel or Google Sheets.
-- Version 4 JSON backup and validated atomic restore with a safety copy and Undo.
+- Version 5 JSON backup and validated atomic restore with a safety copy and Undo.
+- Source review filter for expenses that cannot be safely assigned from their old timestamps.
+- Backup reminder after meaningful use, with a 30-day snooze and browser storage status.
 
 ### Salary
 - One salary record per month, entered by hand in ₹.
@@ -71,6 +85,9 @@ Spendly grew from a single-page expense tracker into a personal finance tracker 
 - Notes, salary history, edit and remove (with confirmation and Undo).
 - A month without a salary is shown as **Not configured**, never as a fake balance.
 - Navigating never writes a record: browsing future or empty months cannot create a salary.
+- Salary summary CSV is separate from the expense CSV and reports each salary pool's actual allocations.
+- Month comparisons use transaction dates; they do not change salary-pool balances.
+- **Use last month’s salary** opens the add form prefilled. Nothing is saved until the user chooses Save.
 
 ### Savings
 - **This month** tab: net activity, contributions, transfers, withdrawals and transaction history.
@@ -93,7 +110,7 @@ Spendly/
 │   └── app.css                # Liquid Glass design system and responsive layout
 ├── js/
 │   ├── core.js                # Pure dates, month keys, paise, validation, finance rules
-│   ├── db.js                  # The only IndexedDB adapter (v1 → v3 schema)
+│   ├── db.js                  # The only IndexedDB adapter (v1 → v5 schema)
 │   ├── repository.js          # Expense, Salary and Savings repositories + migration
 │   └── app.js                 # UI rendering and interaction (never touches IndexedDB)
 ├── sw.js                      # Precache + offline shell + safe update flow
@@ -110,7 +127,7 @@ Spendly/
 ├── memory.md                  # Append/update-only project memory (decisions, issues, fixes)
 ├── tests/
 │   ├── server.mjs             # Zero-dependency local static server
-│   ├── e2e.mjs                # Playwright browser suite (13 scenarios)
+│   ├── e2e.mjs                # Playwright browser suite, including axe accessibility checks
 │   └── unit/
 │       ├── core.test.mjs
 │       ├── repository.test.mjs
@@ -237,7 +254,7 @@ The service worker (`sw.js`) precaches the app shell during install:
 
 Salary and savings are written through the same local repositories as expenses, so every feature works offline exactly as it does online. There are no network calls in any finance path.
 
-**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v12`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
+**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v18`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
 
 Offline use requires **one successful online load first**, over HTTPS or localhost. After that, the app and its local data work without a connection.
 
@@ -378,7 +395,7 @@ If an `origin` already exists, skip `git remote add` and just push. This reposit
 
 ### Updating an existing Netlify site
 
-1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v12`).
+1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v18`).
 2. Commit and push to the branch Netlify watches:
 
 ```bash

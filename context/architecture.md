@@ -144,3 +144,13 @@ The previous month-only formula in the 3.0/3.1 history is superseded for salary 
 ## Addendum — 6 November 2026: Extra Income and salary-first savings allocation
 
 The Salary page displays regular salary remaining and extra-income remaining as separate amounts. Extra income has CRUD history on the Salary page, while its own store remains separate from monthly salary records. A salary-funded savings contribution is one savings ledger record with paise-based allocations to salary and zero or more extra-income entries. The multi-store IndexedDB transaction enforces available combined balance and salary-first priority. Existing savings records with no allocation breakdown continue to debit their historical salary pool.
+
+## Addendum — 6 November 2026: Spendly 3.5 navigation, source review and backup status
+
+Spendly 3.5 keeps the same module boundaries and IndexedDB v5 schema. The Salary, Savings and Dashboard month/tab selections are reflected in the hash route (`#/salary/YYYY-MM`, `#/savings/month|total/YYYY-MM`, and `#/dashboard/YYYY-MM`). Page navigation pushes history; month arrows replace the current route entry; deliberate month-picker and tab changes push entries. The existing `?view=` and `?action=` PWA launch parameters are consumed before being removed.
+
+The Expenses page derives a review queue from salary-funded entries with no `salaryRecordId` or a stale `needs_review` flag. A saved source clears the flag, and the queue can filter directly to those expenses. Saving rows also clear the flag when the user explicitly selects a source. This is a presentation over the existing fields, with no migration or schema change.
+
+`FinancialLedgerRepository` exposes metadata get/set operations backed by the existing `meta` store. The app uses it for the last requested backup download, a 30-day reminder snooze and a completed-onboarding marker. Browser storage quota/persistence APIs are queried when available; their absence does not block app use. Restore remains a validated Replace operation with a safety download and Undo; no merge mode was added.
+
+Other derived UI additions are Salary pool CSV export, transaction-date month comparisons, previous-month salary prefill, contribution allocation labels, and the inline first-use guide. No rendering architecture change was made. IndexedDB remains v5, JSON backup remains v5, and the service-worker cache is v18.
