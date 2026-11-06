@@ -1,6 +1,6 @@
 {
   "name": "spendly",
-  "version": "3.5.1",
+  "version": "3.7.0",
   "private": true,
   "description": "Spendly — a private, offline-first expense tracker.",
   "type": "module",

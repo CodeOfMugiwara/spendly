@@ -2,11 +2,17 @@
 
 ## Extra income and combined savings
 
-Spendly keeps Extra Income in its own IndexedDB store and shows the balance, received total and entries for the selected Salary month only, based on each income record date. Savings contributions use regular salary first, then allocate only the remaining amount from extra income. Each contribution remains a single savings credit with paise-level salary and extra-income allocation details. Used extra-income records cannot be deleted or reduced below their allocated amount.
+Spendly keeps Extra Income in its own IndexedDB store and shows the balance, received total and entries for the selected Salary month, based on each income record's saved salary link. The actual received date stays on the history row. Savings contributions use regular salary first, then allocate only the remaining amount from extra income. Each contribution remains a single savings credit with paise-level salary and extra-income allocation details. Used extra-income records cannot be deleted or reduced below their allocated amount.
 
 Extra Income supports freelancing, part-time, bonus and other sources. Gifts, bonuses and other manual Savings additions continue to be independent of both income pools. Expense sources and the four-page navigation are unchanged.
 
-The current implementation is Spendly 3.5.1, IndexedDB v5, service-worker cache v18, and JSON backup v5. Older backups remain supported; an older backup without an `extraIncome` collection leaves local Extra Income untouched.
+The current implementation is Spendly 3.7.0, IndexedDB v6, service-worker cache v20, and JSON backup v5. Older backups remain supported; older Extra Income entries without a salary link are preserved for review instead of assigned from their received date.
+
+## What changed in 3.7
+
+- Extra Income, Savings contributions and salary-balance transfers can be reversed from a 10-second Undo toast or later from their transaction history.
+- Reversals keep the original transaction, date, salary link and funding split in history. The app blocks repeat reversals and checks later transactions before changing balances.
+- The Your data panel has an Erase all data action with a permanent-deletion warning and confirmation.
 
 
 A private, offline-first salary, expense and savings tracker built with plain HTML, CSS and JavaScript. No build step, no account, no backend, no API keys.
@@ -27,9 +33,16 @@ A private, offline-first salary, expense and savings tracker built with plain HT
 - The shared toast system provides success, error, warning and info variants, safe-area-aware top placement, manual dismissal and duplicate suppression.
 - Extra Income is stored separately. Savings contributions use salary first, then Extra Income, and backup format v5 preserves each allocation.
 
+## What changed in 3.6
+
+- Extra Income keeps its received date separate from its selected salary month. History displays the received date while balances follow the linked salary record.
+- Existing unlinked Extra Income stays intact and is flagged for review instead of being assigned based on its received date.
+- Salary Remaining Balance combines regular salary, linked Extra Income, allocated expenses and savings. The three Salary, Savings and Expenses summary values remain separate.
+- Salary-funded savings use regular salary first and then only Extra Income linked to that same salary record. Salary balance transfers retain the same source allocation.
+
 ## What changed in 3.5.1
 
-- Other income appears only in the month recorded. Adding income from a past month defaults its date to that selected month.
+- Other income appeared only in the month recorded, and adding from a past month defaulted its date to that month. Version 3.6 adds the separate salary-month assignment.
 
 ## What changed in 3.5
 
@@ -110,7 +123,7 @@ Spendly/
 │   └── app.css                # Liquid Glass design system and responsive layout
 ├── js/
 │   ├── core.js                # Pure dates, month keys, paise, validation, finance rules
-│   ├── db.js                  # The only IndexedDB adapter (v1 → v5 schema)
+│   ├── db.js                  # The only IndexedDB adapter (v1 → v6 schema)
 │   ├── repository.js          # Expense, Salary and Savings repositories + migration
 │   └── app.js                 # UI rendering and interaction (never touches IndexedDB)
 ├── sw.js                      # Precache + offline shell + safe update flow
@@ -254,7 +267,7 @@ The service worker (`sw.js`) precaches the app shell during install:
 
 Salary and savings are written through the same local repositories as expenses, so every feature works offline exactly as it does online. There are no network calls in any finance path.
 
-**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v18`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
+**When you change any cached asset (HTML, CSS, JS, manifest, icons), bump `CACHE_VERSION` in `sw.js`.** The current generation is `v20`. Netlify already serves `sw.js` with `Cache-Control: no-cache`.
 
 Offline use requires **one successful online load first**, over HTTPS or localhost. After that, the app and its local data work without a connection.
 
@@ -395,7 +408,7 @@ If an `origin` already exists, skip `git remote add` and just push. This reposit
 
 ### Updating an existing Netlify site
 
-1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v18`).
+1. Bump `CACHE_VERSION` in `sw.js` whenever you change cached assets (currently `v20`).
 2. Commit and push to the branch Netlify watches:
 
 ```bash

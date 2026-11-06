@@ -132,3 +132,15 @@ Browser coverage now verifies separate extra-income balance, salary-first alloca
 ## Addendum — 6 November 2026: month-scoped Other income
 
 The Salary browser scenario now verifies that the Other income balance, received total and history only include entries dated in the selected month. When adding income while viewing a past month, its default date falls in that selected month. The 23 browser scenarios passed, including serious/critical accessibility checks; `npm test` passed 57/57.
+
+## Addendum — 6 November 2026: Spendly 3.6.0 Extra Income pools
+
+- `npm test`: 59/59 unit tests passed.
+- `npm run test:e2e`: 24/24 browser scenarios passed. The v5-to-v6 upgrade preserves old income records and marks records without salary references for review; a user can assign a November 6 receipt to October without changing its received date.
+- Browser scenarios verify October and November remain isolated, combined remaining balance math, salary-first savings funding from that salary's income only, and income edits/deletes recalculating the matching pool.
+- Offline launch and financial entry still work. Axe found no serious or critical violations on Dashboard, Expenses, Salary, Savings, or the expense sheet.
+- DB schema is v6 with an additive `by_salaryRecordId` index. JSON backup remains v5; older unlinked entries are reviewable rather than guessed from their received date.
+
+## Addendum — Spendly 3.7.0 financial reversals
+
+Browser checks cover immediate Undo for Extra Income and Savings, post-refresh history Undo, salary-first plus Extra Income split restoration, dependency rejection while income is used, salary-pool transfer reversal, repeated reversal protection, offline operations and confirmed full-data erase. Unit coverage checks that reversed ledger rows remain in history but no longer affect derived balances.

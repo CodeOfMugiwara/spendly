@@ -184,3 +184,14 @@ The v5 JSON backup shape and relationship checks are unchanged. Backup reminder 
 ## Addendum — 6 November 2026: Other income month display
 
 The Salary page filters the Other income balance, received total and history by the month in each record's date. The add form defaults to a date within the selected Salary month (or today when selecting a future month). This is a display rule only: savings allocation can still use all unallocated income records, regardless of month.
+
+
+## Addendum — Spendly 3.6.0: explicit Extra Income salary links
+
+IndexedDB v6 adds the `by_salaryRecordId` index to the existing `extraIncome` store. Each new income record carries the stable salary record ID it belongs to; date remains the actual received date and may be in a different calendar month. The Salary page filters history by salary record while displaying the unchanged received date. Legacy records without the new reference keep their IDs, amount, date, source, description, timestamps, and existing savings allocation links; they are marked `needs_review` for explicit assignment. Older backup files follow the same review rule rather than inferring allocation month from received date.
+
+Combined remaining for a salary pool is regular salary remaining plus its linked Extra Income remaining. Salary-funded savings and balance transfers consume the salary portion first, then unallocated Extra Income entries linked to that same salary record. Moving already-used income is blocked, and deleting a salary linked to any Extra Income is blocked.
+
+## Addendum — Spendly 3.7.0: reversal state
+
+The existing `extraIncome` and `savings` rows can carry `reversedAt` and `reversalId`. Their original IDs, received/entry dates, salary IDs, amounts and funding allocations stay intact. Balance functions exclude reversed rows and ignore their extra-income allocation links. An undo transaction checks current dependencies and writes the reversal marker atomically; an existing marker makes further attempts fail. Erase all clears every existing ledger and metadata store in one readwrite transaction. These additive fields do not require a database or backup version change.

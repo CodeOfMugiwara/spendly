@@ -344,6 +344,48 @@ test('salary pools follow explicit allocation links rather than transaction cale
   assert.equal(findActiveSalary([october, november]), november);
 });
 
+test('combined salary balance includes only extra income assigned to that salary record', () => {
+  const october = { ...salary('2026-10', 24465), id: 'salary-oct' };
+  const november = { ...salary('2026-11', 30000), id: 'salary-nov' };
+  const expenses = [
+    { id: 'oct-expense', amount: 14404.18, paymentSource: 'salary', salaryRecordId: 'salary-oct' }
+  ];
+  const savings = [
+    { id: 'oct-saving', amount: 2000, type: 'contribution', salaryRecordId: 'salary-oct', salaryAllocationPaise: toPaise(2000) }
+  ];
+  const extraIncome = [
+    { id: 'oct-income', amount: 5000, date: '2026-11-02', salaryRecordId: 'salary-oct' },
+    { id: 'nov-income', amount: 7000, date: '2026-11-03', salaryRecordId: 'salary-nov' }
+  ];
+
+  const octoberPool = computeSalaryPool(october, expenses, savings, extraIncome);
+  const novemberPool = computeSalaryPool(november, expenses, savings, extraIncome);
+  assert.equal(octoberPool.remaining, 8060.82);
+  assert.equal(octoberPool.combinedRemaining, 13060.82);
+  assert.equal(octoberPool.extraIncomePaise, toPaise(5000));
+  assert.equal(novemberPool.combinedRemaining, 37000);
+  assert.equal(octoberPool.poolSavingsTotal, 2000);
+});
+
+test('extra-funded savings reduce only their linked income pool and preserve salary-first splits', () => {
+  const october = { ...salary('2026-10', 5000), id: 'salary-oct' };
+  const november = { ...salary('2026-11', 10000), id: 'salary-nov' };
+  const extraIncome = [
+    { id: 'oct-income', amount: 8000, salaryRecordId: 'salary-oct' },
+    { id: 'nov-income', amount: 9000, salaryRecordId: 'salary-nov' }
+  ];
+  const savings = [{
+    id: 'nov-saving', amount: 10000, type: 'contribution', salaryRecordId: 'salary-nov',
+    salaryAllocationPaise: toPaise(5000), extraIncomeAllocations: [{ extraIncomeRecordId: 'nov-income', amountPaise: toPaise(5000) }]
+  }];
+
+  const octoberPool = computeSalaryPool(october, [], [], extraIncome);
+  const novemberPool = computeSalaryPool(november, [], savings, extraIncome);
+  assert.equal(octoberPool.combinedRemaining, 13000);
+  assert.equal(novemberPool.combinedRemaining, 9000);
+  assert.equal(novemberPool.poolSavingsTotal, 10000);
+});
+
 test('savings balance counts contributions and transfers as credits and withdrawals as debits', () => {
   const result = computeSavingsBalance([
     { amount: 10000, type: 'contribution' },
@@ -354,6 +396,19 @@ test('savings balance counts contributions and transfers as credits and withdraw
   assert.equal(result.contributionTotal, 10000);
   assert.equal(result.transferTotal, 2000);
   assert.equal(result.withdrawalTotal, 3000);
+});
+
+test('reversed savings and income records remain historical but no longer affect balances', () => {
+  const salaryRecord = { id: 'pool', monthKey: '2026-11', amount: 10000, createdAt: '2026-11-01T00:00:00.000Z' };
+  const income = { id: 'income', salaryRecordId: 'pool', amount: 5000 };
+  const savings = [
+    { id: 'reversed-saving', amount: 3000, type: 'contribution', salaryRecordId: 'pool', salaryAllocationPaise: toPaise(1000), extraIncomeAllocations: [{ extraIncomeRecordId: 'income', amountPaise: toPaise(2000) }], reversedAt: '2026-11-06T00:00:00.000Z' },
+    { id: 'active-saving', amount: 2000, type: 'contribution', salaryRecordId: 'pool', salaryAllocationPaise: toPaise(1000), extraIncomeAllocations: [{ extraIncomeRecordId: 'income', amountPaise: toPaise(1000) }] }
+  ];
+  const reversedIncome = { ...income, reversedAt: '2026-11-06T00:00:00.000Z' };
+  assert.equal(computeSavingsBalance(savings).balancePaise, toPaise(2000));
+  assert.equal(computeSalaryPool(salaryRecord, [], savings, [income]).combinedRemainingPaise, toPaise(13000));
+  assert.equal(computeSalaryPool(salaryRecord, [], savings, [reversedIncome]).combinedRemainingPaise, toPaise(9000));
 });
 
 test('external additions increase savings without reducing a salary pool', () => {

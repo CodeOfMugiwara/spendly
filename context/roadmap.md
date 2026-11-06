@@ -61,6 +61,6 @@ Shipped in this pass:
 - Salary-pool CSV export, previous-month salary prefill, transaction-date month comparisons, savings allocation labels, and a compact first-use guide.
 - Axe checks for the main pages and expense sheet, plus focused browser scenarios for source persistence and routes.
 
-No IndexedDB or JSON backup version change was needed. The service-worker cache is v18 and the app version is 3.5.1. Restore continues to use validated Replace with a safety download and Undo. Merge restore remains a future option until conflict reporting and linked-record rules are explicitly designed.
+No IndexedDB or JSON backup version change was needed. The service-worker cache is v19 and the app version is 3.6.0. IndexedDB v6 adds a salary-record index for Extra Income; backup format stays v5 with a review path for older records. Restore continues to use validated Replace with a safety download and Undo. Merge restore remains a future option until conflict reporting and linked-record rules are explicitly designed.
 
 Still gated: savings/salary history search and filters, a savings CSV export, sparkline, render-path splitting, and cloud or account features. Measure actual history and performance needs before taking those on.

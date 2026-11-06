@@ -396,6 +396,11 @@
               <span class="data__text"><strong>Restore backup</strong><small>Replace local data from a JSON file</small></span>
               <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
             </button>
+            <button class="data__action data__action--danger" type="button" id="eraseAllData">
+              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-trash"></use></svg></span>
+              <span class="data__text"><strong>Erase all data</strong><small>Permanently remove all data from this browser</small></span>
+              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
             <input id="fileInput" type="file" accept="application/json,.json" hidden>
           </div>
           <aside class="backup-reminder" id="backupReminder" aria-labelledby="backupReminderTitle" hidden>
@@ -452,10 +457,6 @@
 
           <p class="income-card__balance-label" id="salaryBalanceLabel">Remaining balance</p>
           <p class="income-card__amount" id="salaryAmount">₹0.00</p>
-          <div class="extra-income-balance" aria-label="Other income">
-            <strong id="extraIncomeBalance">₹0.00</strong>
-            <span>Other income</span>
-          </div>
           <p class="income-card__notes" id="salaryNotes" hidden></p>
           <p class="income-card__status" id="salaryStatus">No salary recorded for this month.</p>
 
@@ -757,7 +758,7 @@
     <div class="sheet__grip" aria-hidden="true"></div>
     <header class="sheet__head">
       <button class="icon-button" type="button" id="closeExtraIncomeSheet" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>
-      <div class="sheet__titles"><h2 class="sheet__title" id="extraIncomeSheetTitle">Add extra income</h2><p class="sheet__sub">Tracked separately from regular salary</p></div>
+      <div class="sheet__titles"><h2 class="sheet__title" id="extraIncomeSheetTitle">Add extra income</h2><p class="sheet__sub">Keep its received date and salary month separate</p></div>
       <span class="sheet__spacer" aria-hidden="true"></span>
     </header>
     <div class="sheet__body">
@@ -765,6 +766,7 @@
         <p class="form-error" id="extraIncomeFormError" role="alert" hidden></p>
         <div class="field"><label for="extraIncomeAmount">Amount</label><div class="money-input"><span class="money-input__currency" aria-hidden="true">₹</span><input id="extraIncomeAmount" type="text" inputmode="decimal" placeholder="0.00" required></div></div>
         <div class="field"><label for="extraIncomeDate">Date</label><input id="extraIncomeDate" type="date" required></div>
+        <div class="field"><label for="extraIncomeSalarySelect">Salary month</label><select id="extraIncomeSalarySelect" required></select><p class="field__hint" id="extraIncomePoolHint">Choose the salary pool this income belongs to. The received date stays unchanged.</p></div>
         <div class="field"><label for="extraIncomeSource">Source</label><select id="extraIncomeSource"><option value="freelancing">Freelancing</option><option value="part-time">Part-time</option><option value="bonus">Bonus</option><option value="other">Other</option></select></div>
         <div class="field"><label for="extraIncomeDescription">Description <span class="field__optional">optional</span></label><input id="extraIncomeDescription" type="text" maxlength="100" placeholder="Weekend project, performance bonus…"></div>
         <button class="button button--primary button--block" type="submit" id="saveExtraIncomeButton">Save extra income</button>

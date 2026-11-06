@@ -11,6 +11,7 @@
  *   v3  + expense salary/source indexes and savings ledger relationship indexes
  *   v4  external funding labels use the existing relationship fields
  *   v5  + extraIncome (by_date, by_createdAt)
+ *   v6  + extraIncome.by_salaryRecordId
  *
  * The v2 upgrade only *adds* stores. It never drops, clears or rewrites the
  * existing `expenses` store, so an upgrade cannot lose expense data.
@@ -62,12 +63,14 @@ function ensureFinanceStores(db) {
 
 }
 
-function ensureExtraIncomeStore(db) {
+function ensureExtraIncomeStore(db, transaction) {
+  let store;
   if (!db.objectStoreNames.contains(EXTRA_INCOME_STORE)) {
-    const store = db.createObjectStore(EXTRA_INCOME_STORE, { keyPath: 'id' });
+    store = db.createObjectStore(EXTRA_INCOME_STORE, { keyPath: 'id' });
     store.createIndex('by_date', 'date', { unique: false });
     store.createIndex('by_createdAt', 'createdAt', { unique: false });
-  }
+  } else store = transaction.objectStore(EXTRA_INCOME_STORE);
+  if (store && !store.indexNames.contains('by_salaryRecordId')) store.createIndex('by_salaryRecordId', 'salaryRecordId', { unique: false });
 }
 
 /** Open (and if needed create or upgrade) the Spendly database. */
@@ -103,7 +106,7 @@ export function openExpenseDB(factory = globalThis.indexedDB) {
         // Missing expenseId fields are omitted from this index. The unique
         // index then guarantees one savings withdrawal per linked expense.
         if (!savings.indexNames.contains('by_expenseId')) savings.createIndex('by_expenseId', 'expenseId', { unique: true });
-        ensureExtraIncomeStore(db);
+        ensureExtraIncomeStore(db, transaction);
       } catch (error) {
         // Abort the versionchange transaction so IndexedDB rolls back to the
         // previous schema instead of leaving a half-created database.

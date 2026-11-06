@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { formatMonth, formatMoney, summarize, toISODate, STORAGE_KEY } from '../js/core.js';
+import { formatDate, formatMonth, formatMoney, summarize, toISODate, STORAGE_KEY } from '../js/core.js';
 import { startServer } from './server.mjs';
 
 const require = createRequire(import.meta.url);
@@ -107,9 +107,49 @@ async function dbSnapshot(page) {
     const savings = stores.includes('savings') ? await readAll('savings') : [];
     const extraIncome = stores.includes('extraIncome') ? await readAll('extraIncome') : [];
     const meta = stores.includes('meta') ? await readAll('meta') : [];
+    const version = db.version;
     db.close();
-    return { records, salaries, savings, extraIncome, meta, stores };
+    return { records, salaries, savings, extraIncome, meta, stores, version };
   });
+}
+
+async function seedVersion5FinanceDatabase(page, { salaries, extraIncome }) {
+  await page.goto(`${base}/manifest.json`, { waitUntil: 'networkidle' });
+  await page.evaluate(({ salaries, extraIncome }) => new Promise((resolve, reject) => {
+    const request = indexedDB.open('spendly', 5);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      const expenses = db.createObjectStore('expenses', { keyPath: 'id' });
+      expenses.createIndex('by_date', 'date');
+      expenses.createIndex('by_createdAt', 'createdAt');
+      expenses.createIndex('by_date_createdAt', ['date', 'createdAt']);
+      expenses.createIndex('by_salaryRecordId', 'salaryRecordId');
+      expenses.createIndex('by_paymentSource', 'paymentSource');
+      db.createObjectStore('meta', { keyPath: 'key' });
+      const salaryStore = db.createObjectStore('salaries', { keyPath: 'id' });
+      salaryStore.createIndex('by_monthKey', 'monthKey', { unique: true });
+      salaryStore.createIndex('by_createdAt', 'createdAt');
+      const savings = db.createObjectStore('savings', { keyPath: 'id' });
+      savings.createIndex('by_monthKey', 'monthKey');
+      savings.createIndex('by_date', 'date');
+      savings.createIndex('by_date_createdAt', ['date', 'createdAt']);
+      savings.createIndex('by_type', 'type');
+      savings.createIndex('by_salaryRecordId', 'salaryRecordId');
+      savings.createIndex('by_expenseId', 'expenseId', { unique: true });
+      const incomes = db.createObjectStore('extraIncome', { keyPath: 'id' });
+      incomes.createIndex('by_date', 'date');
+      incomes.createIndex('by_createdAt', 'createdAt');
+    };
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction(['salaries', 'extraIncome'], 'readwrite');
+      for (const record of salaries) transaction.objectStore('salaries').put(record);
+      for (const record of extraIncome) transaction.objectStore('extraIncome').put(record);
+      transaction.oncomplete = () => { db.close(); resolve(); };
+      transaction.onerror = () => reject(transaction.error);
+    };
+  }), { salaries, extraIncome });
 }
 
 async function cacheContents(page) {
@@ -206,6 +246,9 @@ async function addSalary(page, { amount, monthKey, notes, transferChoice = 'Not 
   if (notes) await page.locator('#salaryNotesInput').fill(notes);
   await page.locator('#saveSalaryButton').click();
   await page.locator('#salarySheet').waitFor({ state: 'hidden', timeout: 8000 });
+  if (transferChoice === 'Move to Savings') {
+    await page.locator('#actionSheet').waitFor({ state: 'visible', timeout: 4000 });
+  }
   if (await page.locator('#actionSheet').isVisible()) {
     await page.locator('#actionList .action__item').filter({ hasText: transferChoice }).click();
     await page.locator('#actionSheet').waitFor({ state: 'hidden' });
@@ -229,12 +272,18 @@ async function addSaving(page, { amount, description, source = 'salary', fromTot
   await page.locator('#savingSheet').waitFor({ state: 'hidden', timeout: 8000 });
 }
 
-async function addExtraIncome(page, { amount, source = 'freelancing', description = 'Extra work' } = {}) {
+async function addExtraIncome(page, { amount, date = daysAgoISO(0), salaryMonth, source = 'freelancing', description = 'Extra work' } = {}) {
   await page.locator('[data-view="salary"]').click();
   await page.locator('#addExtraIncomeButton').click();
   await page.locator('#extraIncomeSheet').waitFor({ state: 'visible' });
   await page.locator('#extraIncomeAmount').fill(String(amount));
-  await page.locator('#extraIncomeDate').fill(daysAgoISO(0));
+  await page.locator('#extraIncomeDate').fill(date);
+  if (salaryMonth) {
+    const snapshot = await dbSnapshot(page);
+    const salary = snapshot.salaries.find(record => record.monthKey === salaryMonth);
+    assert.ok(salary, `expected a salary for ${salaryMonth}`);
+    await page.locator('#extraIncomeSalarySelect').selectOption(salary.id);
+  }
   await page.locator('#extraIncomeSource').selectOption(source);
   await page.locator('#extraIncomeDescription').fill(description);
   await page.locator('#saveExtraIncomeButton').click();
@@ -678,7 +727,7 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   assert.equal(await page.locator('#salaryNotes').innerText(), '“November pay”');
 
   await addSaving(page, { amount: '1000', description: 'Emergency fund' });
-  await waitForToast(page, 'Salary contribution saved');
+  await waitForToast(page, 'added to savings');
   assert.equal(await page.locator('#savingsMonthTotal').innerText(), formatMoney(1000));
 
   await addSaving(page, { amount: '500', description: 'Gold' });
@@ -777,37 +826,71 @@ await run('savings use salary first then preserve extra-income funding allocatio
   globalThis.__activePage = page;
   watch(page);
   await gotoApp(page);
-  await addSalary(page, { amount: '10000' });
+  const current = monthKeyNow();
+  const previous = shiftMonthKey(current, -1);
+  const receivedDate = daysAgoISO(0);
+  await addSalary(page, { amount: '1000', monthKey: previous });
+  await addExtraIncome(page, { amount: '6000', date: receivedDate, salaryMonth: previous, description: 'Previous pool project' });
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(7000));
+  assert.equal(await page.locator('#salarySplit .split__item').nth(0).locator('strong').innerText(), formatMoney(1000));
+  assert.match(await page.locator('#extraIncomeList').innerText(), new RegExp(formatDate(receivedDate)));
+  assert.match(await page.locator('#extraIncomeList').innerText(), new RegExp(`For ${formatMonth(previous)} salary`));
+
+  await addSalary(page, { amount: '10000', monthKey: current });
   await addExpense(page, { amount: '5000', description: 'Salary spending' });
-  await addExtraIncome(page, { amount: '8000', source: 'freelancing', description: 'Website project' });
+  await addExtraIncome(page, { amount: '8000', date: receivedDate, salaryMonth: current, source: 'freelancing', description: 'Website project' });
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(13000));
+  assert.equal(await page.locator('#salarySplit .split__item').nth(0).locator('strong').innerText(), formatMoney(10000));
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1, 'only current salary income is shown');
   await page.locator('[data-extra-income-edit]').click();
   await page.locator('#extraIncomeDescription').fill('Client website project');
   await page.locator('#saveExtraIncomeButton').click();
   await page.locator('#extraIncomeSheet').waitFor({ state: 'hidden' });
-  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(8000));
   assert.equal((await page.locator('#extraIncomeTotal').textContent()).trim(), `${formatMoney(8000)} received`);
   assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1);
   await page.locator('#salaryPrevMonth').click();
-  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(0));
-  assert.equal((await page.locator('#extraIncomeTotal').textContent()).trim(), `${formatMoney(0)} received`);
-  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 0);
-  assert.match(await page.locator('#extraIncomeList').innerText(), /No other income added in/i);
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(7000));
+  assert.equal((await page.locator('#extraIncomeTotal').textContent()).trim(), `${formatMoney(6000)} received`);
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1, 'November received date does not move October income to November');
+  assert.match(await page.locator('#extraIncomeList').innerText(), new RegExp(formatDate(receivedDate)));
   await page.locator('#salaryNextMonth').click();
-  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(8000));
-  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1);
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(13000));
   await addSaving(page, { amount: '10000', description: 'Combined contribution', source: 'salary' });
   await page.locator('[data-view="salary"]').click();
-  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
-  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(3000));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(3000));
+  assert.deepEqual(
+    await page.locator('#salarySplit .split__item strong').allTextContents(),
+    [formatMoney(10000), formatMoney(10000), formatMoney(5000)]
+  );
   await page.locator('[data-view="savings"]').click();
   assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(10000));
   const snapshot = await dbSnapshot(page);
   const saving = snapshot.savings.find(record => record.description === 'Combined contribution');
+  const currentSalary = snapshot.salaries.find(record => record.monthKey === current);
+  const previousSalary = snapshot.salaries.find(record => record.monthKey === previous);
+  const currentIncome = snapshot.extraIncome.find(record => record.description === 'Client website project');
+  const previousIncome = snapshot.extraIncome.find(record => record.description === 'Previous pool project');
   assert.equal(saving.amount, 10000);
+  assert.equal(saving.salaryRecordId, currentSalary.id);
   assert.equal(saving.salaryAllocationPaise, 500000);
-  assert.deepEqual(saving.extraIncomeAllocations, [{ extraIncomeRecordId: snapshot.extraIncome[0].id, amountPaise: 500000 }]);
-  assert.equal(snapshot.extraIncome[0].description, 'Client website project');
+  assert.deepEqual(saving.extraIncomeAllocations, [{ extraIncomeRecordId: currentIncome.id, amountPaise: 500000 }]);
+  assert.equal(currentIncome.salaryRecordId, currentSalary.id);
+  assert.equal(previousIncome.salaryRecordId, previousSalary.id);
+  assert.equal(previousIncome.date, receivedDate);
 
+  await page.locator('[data-view="salary"]').click();
+  await page.locator(`[data-extra-income-edit="${currentIncome.id}"]`).click();
+  await page.locator('#extraIncomeAmount').fill('9000');
+  await page.locator('#saveExtraIncomeButton').click();
+  await page.locator('#extraIncomeSheet').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(4000), 'editing income recalculates only its assigned pool');
+  await page.locator(`[data-extra-income-edit="${currentIncome.id}"]`).click();
+  await page.locator('#extraIncomeAmount').fill('8000');
+  await page.locator('#saveExtraIncomeButton').click();
+  await page.locator('#extraIncomeSheet').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(3000));
+
+  await page.locator('[data-view="savings"]').click();
   await openRowMenu(page, '#savingsMonthList', 'Combined contribution');
   await page.locator('#actionList .action__item').filter({ hasText: 'Edit savings' }).click();
   await page.locator('#savingAmountInput').fill('14000');
@@ -819,29 +902,167 @@ await run('savings use salary first then preserve extra-income funding allocatio
     await page.locator('#savingSheet').waitFor({ state: 'hidden' });
   }
   await page.locator('[data-view="salary"]').click();
-  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
-  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(3000));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(3000));
   await page.locator('[data-view="savings"]').click();
   assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(10000));
   await page.locator('[data-view="salary"]').click();
   await page.locator('[data-extra-income-delete]').click();
   await waitForToast(page, 'funded savings');
-  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(3000));
 
-  const previousMonth = shiftMonthKey(monthKeyNow(), -1);
   await page.locator('#salaryPrevMonth').click();
   await page.locator('#addExtraIncomeButton').click();
   await page.locator('#extraIncomeSheet').waitFor({ state: 'visible' });
-  assert.equal((await page.locator('#extraIncomeDate').inputValue()).slice(0, 7), previousMonth);
+  assert.equal((await page.locator('#extraIncomeDate').inputValue()).slice(0, 7), previous);
+  assert.equal((await page.locator('#extraIncomeSalarySelect').inputValue()), previousSalary.id);
   await page.locator('#extraIncomeAmount').fill('1000');
   await page.locator('#extraIncomeDescription').fill('Previous month project');
   await page.locator('#saveExtraIncomeButton').click();
   await page.locator('#extraIncomeSheet').waitFor({ state: 'hidden' });
-  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(1000));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(8000));
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 2);
+  await page.locator('#extraIncomeList [data-extra-income-delete]').last().click();
+  await page.waitForFunction(() => document.querySelectorAll('#extraIncomeList [data-extra-income-edit]').length === 1);
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(7000), 'deleting unused income recalculates only its assigned pool');
   assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1);
   await page.locator('#salaryNextMonth').click();
-  assert.equal(await page.locator('#extraIncomeBalance').innerText(), formatMoney(3000));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(3000));
   assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1);
+  await context.close();
+});
+
+await run('financial undo preserves allocations, survives reload and works offline; erase-all is confirmed', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  await gotoApp(page);
+  await context.setOffline(true);
+  await page.locator('#offlineBanner').waitFor({ state: 'visible' });
+
+  const current = monthKeyNow();
+  const previous = shiftMonthKey(current, -1);
+  const receivedDate = daysAgoISO(0);
+  await addSalary(page, { amount: '3000', monthKey: previous });
+  await addSalary(page, { amount: '10000', monthKey: current });
+
+  await addExtraIncome(page, { amount: '5000', date: receivedDate, salaryMonth: current, description: 'Quick undo income' });
+  await waitForToast(page, 'extra income added');
+  assert.equal(await page.locator('#toastAction').isVisible(), true);
+  await page.setViewportSize({ width: 320, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'the income Undo row fits a 320px screen');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#toastAction').click();
+  await waitForToast(page, 'Extra income reversed.');
+  let snapshot = await dbSnapshot(page);
+  const quickIncome = snapshot.extraIncome.find(record => record.description === 'Quick undo income');
+  assert.ok(quickIncome.reversedAt);
+  assert.equal(quickIncome.date, receivedDate);
+  assert.equal(quickIncome.salaryRecordId, snapshot.salaries.find(record => record.monthKey === current).id);
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(10000));
+  const repeatedIncomeUndo = await page.evaluate(async id => {
+    const { openSpendlyDB } = await import('/js/db.js');
+    const { FinancialLedgerRepository } = await import('/js/repository.js');
+    const ledger = new FinancialLedgerRepository(await openSpendlyDB());
+    try { await ledger.reverseExtraIncome(id); return false; } catch (error) { return error.name === 'AlreadyReversedError'; }
+  }, quickIncome.id);
+  assert.equal(repeatedIncomeUndo, true, 'the same income record cannot be reversed twice');
+
+  await addExtraIncome(page, { amount: '5000', date: receivedDate, salaryMonth: current, description: 'History undo income' });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  await page.locator('[data-view="salary"]').click();
+  await page.locator('#extraIncomeList [data-extra-income-undo]').click();
+  await page.locator('#actionList .action__item').filter({ hasText: 'Undo extra income' }).click();
+  await waitForToast(page, 'Extra income reversed.');
+  snapshot = await dbSnapshot(page);
+  const historyIncome = snapshot.extraIncome.find(record => record.description === 'History undo income');
+  assert.ok(historyIncome.reversedAt, 'the history action works after refresh');
+  assert.equal(historyIncome.date, receivedDate);
+  assert.equal(historyIncome.salaryRecordId, snapshot.salaries.find(record => record.monthKey === current).id);
+
+  await addExtraIncome(page, { amount: '5000', date: receivedDate, salaryMonth: current, description: 'Allocated undo income' });
+  await addSaving(page, { amount: '12000', description: 'Combined source contribution', source: 'salary' });
+  await waitForToast(page, 'added to savings');
+  snapshot = await dbSnapshot(page);
+  const income = snapshot.extraIncome.find(record => record.description === 'Allocated undo income');
+  const contribution = snapshot.savings.find(record => record.description === 'Combined source contribution');
+  assert.equal(contribution.salaryAllocationPaise, 1000000);
+  assert.deepEqual(contribution.extraIncomeAllocations, [{ extraIncomeRecordId: income.id, amountPaise: 200000 }]);
+
+  await page.locator('[data-view="salary"]').click();
+  await page.locator('#extraIncomeList [data-extra-income-undo]').click();
+  await page.locator('#actionList .action__item').filter({ hasText: 'Undo extra income' }).click();
+  await waitForToast(page, 'Reverse those savings entries first');
+  snapshot = await dbSnapshot(page);
+  assert.equal(Boolean(snapshot.extraIncome.find(record => record.id === income.id).reversedAt), false);
+
+  await page.locator('[data-view="savings"]').click();
+  await page.locator('#savingsMonthList .entry').filter({ hasText: 'Combined source contribution' }).locator('.entry__menu').click();
+  await page.locator('#actionList .action__item').filter({ hasText: 'Undo savings transaction' }).click();
+  await page.locator('#actionList .action__item').filter({ hasText: 'Undo transaction' }).click();
+  await waitForToast(page, 'Savings transaction reversed.');
+  snapshot = await dbSnapshot(page);
+  const reversedContribution = snapshot.savings.find(record => record.id === contribution.id);
+  assert.ok(reversedContribution.reversedAt);
+  assert.equal(reversedContribution.salaryAllocationPaise, 1000000);
+  assert.deepEqual(reversedContribution.extraIncomeAllocations, [{ extraIncomeRecordId: income.id, amountPaise: 200000 }]);
+  assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(0));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(15000));
+
+  const repeatedSavingUndo = await page.evaluate(async id => {
+    const { openSpendlyDB } = await import('/js/db.js');
+    const { FinancialLedgerRepository } = await import('/js/repository.js');
+    const ledger = new FinancialLedgerRepository(await openSpendlyDB());
+    try { await ledger.reverseSaving(id); return false; } catch (error) { return error.name === 'AlreadyReversedError'; }
+  }, contribution.id);
+  assert.equal(repeatedSavingUndo, true, 'the same savings record cannot be reversed twice');
+
+  await page.locator('[data-view="salary"]').click();
+  await page.locator('#extraIncomeList [data-extra-income-undo]').click();
+  await page.locator('#actionList .action__item').filter({ hasText: 'Undo extra income' }).click();
+  await waitForToast(page, 'Extra income reversed.');
+  snapshot = await dbSnapshot(page);
+  const reversedIncome = snapshot.extraIncome.find(record => record.id === income.id);
+  assert.ok(reversedIncome.reversedAt);
+  assert.equal(reversedIncome.date, receivedDate);
+  assert.equal(reversedIncome.salaryRecordId, contribution.salaryRecordId);
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(10000));
+
+  await page.locator('#salaryPrevMonth').click();
+  await page.locator('#salaryTransferButton').click();
+  await waitForToast(page, 'transferred to savings');
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
+  await page.locator('#toastAction').click();
+  await waitForToast(page, 'Savings transaction reversed.');
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(3000));
+  await page.locator('[data-view="savings"]').click();
+  await page.locator('#savingsTabTotal').click();
+  assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(0));
+
+  await page.locator('[data-view="salary"]').click();
+  await page.locator('#salaryNextMonth').click();
+  await addExtraIncome(page, { amount: '5000', date: receivedDate, salaryMonth: current, description: 'Income now spent' });
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '12000', description: 'Spent linked income' });
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(3000));
+  await page.locator('#extraIncomeList [data-extra-income-undo]').click();
+  await page.locator('#actionList .action__item').filter({ hasText: 'Undo extra income' }).click();
+  await waitForToast(page, 'make the salary balance negative');
+  snapshot = await dbSnapshot(page);
+  assert.equal(Boolean(snapshot.extraIncome.find(record => record.description === 'Income now spent').reversedAt), false);
+  assert.equal(snapshot.records.some(record => record.description === 'Spent linked income'), true);
+
+  await page.locator('[data-view="expenses"]').click();
+  await page.locator('#eraseAllData').click();
+  assert.match(await page.locator('#actionMessage').innerText(), /permanently deletes all expenses.*cannot be undone/i);
+  await page.locator('#actionList .action__item').filter({ hasText: 'Erase all data' }).click();
+  await waitForToast(page, 'All Spendly data erased.');
+  snapshot = await dbSnapshot(page);
+  assert.equal(snapshot.records.length, 0);
+  assert.equal(snapshot.salaries.length, 0);
+  assert.equal(snapshot.savings.length, 0);
+  assert.equal(snapshot.extraIncome.length, 0);
   await context.close();
 });
 
@@ -892,9 +1113,9 @@ await run('salary pools, balance transfers and savings-funded expenses stay link
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(35000));
 
   await addSalary(page, { amount: '40000', monthKey: current, transferChoice: 'Move to Savings' });
-  await waitForToast(page, 'moved to Savings.');
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(40000));
   await page.locator('#salaryPrevMonth').click();
+  await page.waitForFunction(() => document.getElementById('salaryAmount')?.innerText === '₹0.00');
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
   await page.locator('#salaryNextMonth').click();
 
@@ -960,7 +1181,7 @@ await run('salary pools, balance transfers and savings-funded expenses stay link
   await page.locator('#salaryPrevMonth').click();
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(1000));
   await page.locator('#salaryTransferButton').click();
-  await waitForToast(page, 'moved to Savings.');
+  await page.waitForFunction(() => document.getElementById('salaryAmount')?.innerText === '₹0.00');
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(0));
   const finalSnapshot = await dbSnapshot(page);
   const transfers = finalSnapshot.savings.filter(record => record.type === 'salary_balance_transfer');
@@ -1093,9 +1314,9 @@ await run('salary summary export matches salary pools and last-month copy only p
 
   const csv = await downloadFrom(page, () => page.locator('#exportSalaryCsv').click());
   assert.match(csv.filename, /^spendly-salary-summary-\d{4}-\d{2}-\d{2}\.csv$/);
-  assert.match(csv.text, /"Month","Salary \(INR\)","Expenses \(INR\)","Savings from salary \(INR\)","Remaining \(INR\)"/);
-  assert.match(csv.text, new RegExp(`"${formatMonth(previous)}","50000\\.00","1000\\.00","0\\.00","49000\\.00"`));
-  assert.match(csv.text, new RegExp(`"${formatMonth(current)}","50\\.00","80\\.00","0\\.00","-30\\.00"`));
+  assert.match(csv.text, /"Month","Salary \(INR\)","Extra income \(INR\)","Expenses \(INR\)","Savings \(INR\)","Remaining \(INR\)"/);
+  assert.match(csv.text, new RegExp(`"${formatMonth(previous)}","50000\\.00","0\\.00","1000\\.00","0\\.00","49000\\.00"`));
+  assert.match(csv.text, new RegExp(`"${formatMonth(current)}","50\\.00","0\\.00","80\\.00","0\\.00","-30\\.00"`));
 
   await page.locator('#salaryMonthPickerButton').click();
   await page.locator('#monthPickerSheet').waitFor({ state: 'visible' });
@@ -1256,7 +1477,7 @@ await run('savings history spans months and stays out of expenses', async () => 
   const previous = shiftMonthKey(current, -1);
 
   await addSaving(page, { amount: '1000', description: 'This month' });
-  await waitForToast(page, 'Salary contribution saved');
+  await waitForToast(page, 'added to savings');
 
   await page.locator('#savingsTabTotal').click();
   assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(1000));
@@ -1275,7 +1496,7 @@ await run('savings history spans months and stays out of expenses', async () => 
   await page.locator('#savingDescriptionInput').fill('Last month fund');
   await page.locator('#saveSavingButton').click();
   await page.locator('#savingSheet').waitFor({ state: 'hidden' });
-  await waitForToast(page, 'Salary contribution saved');
+  await waitForToast(page, 'added to savings');
 
   assert.equal(await page.locator('#savingsTotalMonthAmount').innerText(), formatMoney(2500));
   assert.equal(await page.locator('#savingsTotalAmount').innerText(), formatMoney(3500));
@@ -1502,6 +1723,65 @@ await run('legacy v2 transactions allocate by entry timestamp and unmatched rows
   await context.close();
 });
 
+await run('v5 extra income upgrades safely and can be assigned independently of its received date', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  const current = monthKeyNow();
+  const previous = shiftMonthKey(current, -1);
+  const receivedDate = daysAgoISO(0);
+  const salary = (id, monthKey, amount) => ({
+    id, monthKey, amount, amountPaise: Math.round(amount * 100), notes: '',
+    createdAt: `${monthKey}-01T10:00:00.000Z`, updatedAt: `${monthKey}-01T10:00:00.000Z`
+  });
+  const legacyIncome = {
+    id: 'legacy-income-nov-date', amount: 5000, amountPaise: 500000, date: receivedDate,
+    monthKey: current, description: 'Legacy project', source: 'freelancing',
+    createdAt: `${receivedDate}T09:00:00.000Z`, updatedAt: `${receivedDate}T09:00:00.000Z`
+  };
+  await seedVersion5FinanceDatabase(page, {
+    salaries: [salary('salary-previous', previous, 24465), salary('salary-current', current, 30000)],
+    extraIncome: [legacyIncome]
+  });
+  await gotoApp(page);
+  await page.locator('[data-view="salary"]').click();
+
+  let snapshot = await dbSnapshot(page);
+  assert.equal(snapshot.version, 6);
+  assert.equal(snapshot.extraIncome.length, 1);
+  assert.equal(snapshot.extraIncome[0].id, legacyIncome.id);
+  assert.equal(snapshot.extraIncome[0].date, receivedDate);
+  assert.equal(snapshot.extraIncome[0].description, legacyIncome.description);
+  assert.equal(snapshot.extraIncome[0].source, legacyIncome.source);
+  assert.equal(snapshot.extraIncome[0].salaryRecordId, undefined, 'migration does not guess the salary month from the received date');
+  assert.equal(snapshot.extraIncome[0].allocationStatus, 'needs_review');
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(30000));
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 1);
+  assert.match(await page.locator('#extraIncomeList').innerText(), /Salary month needs review/);
+
+  await page.locator('[data-extra-income-edit]').click();
+  assert.equal(await page.locator('#extraIncomeDate').inputValue(), receivedDate);
+  await page.locator('#extraIncomeSalarySelect').selectOption('salary-previous');
+  await page.locator('#saveExtraIncomeButton').click();
+  await page.locator('#extraIncomeSheet').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#salaryMonthLabel').innerText(), formatMonth(previous));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(29465));
+  assert.equal((await page.locator('#salarySplit .split__item').nth(0).locator('strong').innerText()), formatMoney(24465));
+  assert.equal(await page.locator('#extraIncomeTotal').textContent().then(value => value.trim()), `${formatMoney(5000)} received`);
+  assert.match(await page.locator('#extraIncomeList').innerText(), new RegExp(formatDate(receivedDate)));
+
+  await page.locator('#salaryNextMonth').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(30000));
+  assert.equal(await page.locator('#extraIncomeList [data-extra-income-edit]').count(), 0);
+  snapshot = await dbSnapshot(page);
+  assert.equal(snapshot.extraIncome[0].salaryRecordId, 'salary-previous');
+  assert.equal(snapshot.extraIncome[0].allocationStatus, undefined);
+  assert.ok(snapshot.stores.includes('extraIncome'));
+
+  await context.close();
+});
+
 await run('salary and savings can be added and read with no network', async () => {
   const context = await createContext();
   const page = await context.newPage();
@@ -1516,7 +1796,7 @@ await run('salary and savings can be added and read with no network', async () =
   await addSalary(page, { amount: '50000' });
   await waitForToast(page, 'Salary saved.');
   await addSaving(page, { amount: '1000', description: 'Offline savings' });
-  await waitForToast(page, 'Salary contribution saved');
+  await waitForToast(page, 'added to savings');
   assert.equal(await page.locator('#savingsMonthTotal').innerText(), formatMoney(1000));
 
   await page.reload({ waitUntil: 'load' });

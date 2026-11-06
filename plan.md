@@ -8,20 +8,23 @@ Spendly is a local-first, offline-capable personal finance app built with plain 
 
 | Area | Current state |
 |---|---|
-| App version | 3.5.1 |
-| IndexedDB | v5; separate Extra Income store |
+| App version | 3.7.0 |
+| IndexedDB | v6; Extra Income has a salary-record index |
 | Backup | JSON v5, including income and savings allocations; older formats supported |
-| Offline shell | Service-worker cache v18 |
+| Offline shell | Service-worker cache v20 |
 | Money | Integer paise for financial calculations |
 | Expense sources | Salary, Savings and Others; Others are included in expense reporting without changing either tracked balance |
-| Income and savings | Salary pools and Extra Income are separate. Salary-funded savings use regular salary first, then Extra Income. Gifts, bonuses and other manual savings remain independent. |
-| Tests | 57 unit tests and 23 browser scenarios pass, including serious/critical axe checks for all pages and the expense sheet. |
+| Income and savings | Extra Income is linked to one salary record independently of its received date. Salary-funded savings use that pool's regular salary first, then its linked Extra Income. Gifts, bonuses and other manual savings remain independent. |
+| Tests | 60 unit tests and 25 browser scenarios pass, including reversals, offline use, erase-all and serious/critical accessibility checks. |
 
 ### Important behaviour to preserve
 
 - The most recently created salary is the active salary pool. Pool allocations follow entry timestamps, while expense dates continue to drive calendar-based expense reports.
 - Existing records without a reliable timestamp match stay marked **Source needs review**. The app must not guess which salary funded them.
+- Extra Income stores the salary record ID separately from its received date. Legacy entries without that link are preserved for explicit review; new savings allocations use Extra Income from the same salary pool only.
 - Savings contributions retain their salary and Extra Income allocation details. Allocated income cannot be deleted or reduced below the amount already used.
+- Reversals mark the original transaction with a timestamp and stable reversal ID. They preserve its source split, leave its row in history, and reject repeat reversals or reversals that would invalidate later activity.
+- Erase all data clears every IndexedDB ledger and metadata store atomically, removes the legacy localStorage copy, and requires a warning confirmation.
 - Savings withdrawals linked to expenses remain atomic with those expenses. Savings never appear as expenses or in the expense-only CSV.
 - Local data stays on the current browser/site origin. Backup and restore must preserve relationships and must not silently overwrite or discard records.
 
@@ -100,7 +103,7 @@ The app still re-renders multiple sections after mutations. No render-path split
 
 ## Project hygiene to include with future changes
 
-- Keep README, `context/` docs and this plan aligned with actual IndexedDB, backup, service-worker and app versions. Version and cache references were refreshed for 3.5.1.
+- Keep README, `context/` docs and this plan aligned with actual IndexedDB, backup, service-worker and app versions. Version and cache references were refreshed for 3.6.0.
 - Keep schema upgrades additive and retain old-backup compatibility unless a documented migration says otherwise.
 - Add unit coverage for financial rules and browser coverage for user workflows. For source changes, assert persisted records and recalculated balances, not only a toast.
 - Check a narrow phone viewport, a typical phone viewport and desktop after UI changes; check the offline flow after changes to cached assets.
@@ -122,8 +125,8 @@ The app still re-renders multiple sections after mutations. No render-path split
 5. Offline launch and service-worker updates still behave correctly after cached files change.
 6. README, `memory.md`, and relevant `context/` docs describe the shipped behaviour and current versions.
 
-## Follow-up — month-scoped Other income (Spendly 3.5.1)
+## Follow-up — salary-linked Other income and combined balance (Spendly 3.6.0)
 
-The Salary page now shows Extra Income only in the selected month matching each record's date. The month balance, received total and history list all follow that same date filter. Savings funding still uses the full available Extra Income balance across all records, preserving existing allocation rules.
+Each new Extra Income record stores a stable `salaryRecordId`; its received date stays independent. Existing records without a link are preserved for explicit assignment during review. The Salary page combines the linked income with regular salary in Remaining Balance, and savings/transfer allocation uses only income linked to that pool. The month/year selector offers salary records that exist and explains when the selected month needs a salary record first.
 
-**Status:** Implemented, covered by a month-switch browser regression, and delivered with service-worker cache v18.
+**Status:** Implemented, covered by cross-month and v5-upgrade browser scenarios, and delivered with IndexedDB v6 and service-worker cache v19.

@@ -154,3 +154,12 @@ The Expenses page derives a review queue from salary-funded entries with no `sal
 `FinancialLedgerRepository` exposes metadata get/set operations backed by the existing `meta` store. The app uses it for the last requested backup download, a 30-day reminder snooze and a completed-onboarding marker. Browser storage quota/persistence APIs are queried when available; their absence does not block app use. Restore remains a validated Replace operation with a safety download and Undo; no merge mode was added.
 
 Other derived UI additions are Salary pool CSV export, transaction-date month comparisons, previous-month salary prefill, contribution allocation labels, and the inline first-use guide. No rendering architecture change was made. IndexedDB remains v5, JSON backup remains v5, and the service-worker cache is v18.
+
+
+## Addendum — Spendly 3.6.0: salary-linked Extra Income
+
+The `extraIncome` store has a non-unique `by_salaryRecordId` index. Extra income stores the selected salary record ID independently from its received date. Its balance is computed within that salary pool as amount less savings allocations that reference the income record. The Salary page combines regular salary remaining with that linked income remaining. New contributions and balance transfers preserve salary-first source allocation and use income from the same salary record only. Schema migration leaves old records without a salary reference intact with `needs_review`; date alone is never used to assign them.
+
+## Addendum — Spendly 3.7.0: ledger reversals and full local erase
+
+Extra Income and savings credits/transfers are reversed in-place with `reversedAt` and a stable `reversalId`; original dates, salary references and paise allocation splits remain on their original records. Derived balances ignore reversed rows while history continues to display them. Reversal writes and dependency checks are atomic in IndexedDB; income used by an active savings record and credits whose reversal would make Savings negative are protected. No schema or backup version change is required. The Your data panel's erase-all confirmation clears expenses, salaries, savings, Extra Income and metadata in one IndexedDB transaction, then removes the legacy localStorage copy.

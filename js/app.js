@@ -57,6 +57,7 @@ import {
 } from './db.js';
 import {
   DuplicateMonthError,
+  AlreadyReversedError,
   FinancialLedgerRepository,
   InsufficientSalaryBalanceError,
   InsufficientSavingsError,
@@ -66,6 +67,7 @@ import {
   NotFoundError,
   SalaryRepository,
   SavingsRepository,
+  UndoDependencyError,
   ValidationError
 } from './repository.js';
 
@@ -188,6 +190,13 @@ async function initData() {
     } catch (error) {
       console.error('Salary allocation migration failed:', error);
       throw new Error('Spendly could not finish the safe salary-allocation upgrade. Your existing records are still saved.');
+    }
+
+    try {
+      await state.ledgerRepo.migrateExtraIncomePools();
+    } catch (error) {
+      console.error('Extra income salary-pool migration failed:', error);
+      throw new Error('Spendly could not finish linking existing extra income to its salary month. Your existing records are still saved.');
     }
 
     await refreshAll();
@@ -636,8 +645,8 @@ function renderSalaryPage() {
   const key = state.salaryMonth;
   const record = findSalaryForMonth(state.salaries, key);
   const finance = record
-    ? { ...computeSalaryPool(record, state.expenses, state.savings), hasSalary: true }
-    : { hasSalary: false, expenseTotal: 0, contributionTotal: 0, transferTotal: 0, remaining: null, remainingPaise: null };
+    ? { ...computeSalaryPool(record, state.expenses, state.savings, state.extraIncome), hasSalary: true }
+    : { hasSalary: false, expenseTotal: 0, contributionTotal: 0, transferTotal: 0, poolSavingsTotal: 0, remaining: null, remainingPaise: null, combinedRemaining: null, combinedRemainingPaise: null };
   const label = formatMonthKey(key);
 
   $('salaryMonthLabel').textContent = label;
@@ -646,19 +655,22 @@ function renderSalaryPage() {
   $('salaryNowRow').hidden = key === currentMonthKey();
 
   $('salaryBalanceLabel').textContent = 'Remaining balance';
-  $('salaryAmount').innerHTML = record ? amountMarkup(finance.remaining) : 'No salary pool';
+  $('salaryAmount').innerHTML = record ? amountMarkup(finance.combinedRemaining) : 'No salary pool';
   $('salaryAmount').classList.toggle('is-unset', !record);
-  $('salaryAmount').classList.toggle('is-negative', Boolean(record && finance.remainingPaise < 0));
-  $('salaryAmount').setAttribute('aria-label', record ? `Remaining balance ${formatMoney(finance.remaining)}` : 'No salary pool for this month');
-  const monthExtraIncome = state.extraIncome.filter(entry => entry.date.slice(0, 7) === key);
-  const extraBalance = monthExtraIncome.reduce((sum, entry) => sum + extraIncomeRemaining(entry, state.savings), 0);
-  $('extraIncomeBalance').textContent = formatMoney(extraBalance);
+  $('salaryAmount').classList.toggle('is-negative', Boolean(record && finance.combinedRemainingPaise < 0));
+  $('salaryAmount').setAttribute('aria-label', record ? `Remaining balance ${formatMoney(finance.combinedRemaining)}` : 'No salary pool for this month');
+  const salaryIds = new Set(state.salaries.map(salary => salary.id));
+  const monthExtraIncome = record
+    ? state.extraIncome.filter(entry => entry.salaryRecordId === record.id)
+    : [];
+  const unassignedHistory = state.extraIncome.filter(entry =>
+    (!entry.salaryRecordId || !salaryIds.has(entry.salaryRecordId)) && entry.date.slice(0, 7) === key);
 
   $('salaryNotes').hidden = !record?.notes;
   $('salaryNotes').textContent = record?.notes ? `“${record.notes}”` : '';
 
   $('salaryStatus').textContent = record
-    ? `Salary pool added ${formatDate(record.createdAt.slice(0, 10))}. Expenses and savings follow the pool they were assigned to.`
+    ? `Salary pool added ${formatDate(record.createdAt.slice(0, 10))}. Extra income, expenses and savings stay with this salary month.`
     : `No salary pool for ${label}. Add salary to start a new pool.`;
 
   $('salarySplit').innerHTML = `
@@ -668,9 +680,9 @@ function renderSalaryPage() {
     </div>
     <div class="split__item">
       <span>Savings</span>
-      <strong>${escapeHTML(record ? formatMoney(finance.contributionTotal + finance.transferTotal) : '—')}</strong>
+      <strong>${escapeHTML(record ? formatMoney(finance.poolSavingsTotal) : '—')}</strong>
     </div>
-    <div class="split__item split__item--end${record && finance.remainingPaise < 0 ? ' is-negative' : ''}">
+    <div class="split__item split__item--end${record && finance.combinedRemainingPaise < 0 ? ' is-negative' : ''}">
       <span>Expenses</span>
       <strong>${escapeHTML(record ? formatMoney(finance.expenseTotal) : '—')}</strong>
     </div>`;
@@ -686,11 +698,11 @@ function renderSalaryPage() {
 
   const activeSalary = findActiveSalary(state.salaries);
   const hasNewerSalary = Boolean(record && activeSalary && activeSalary.id !== record.id && Date.parse(activeSalary.createdAt) > Date.parse(record.createdAt));
-  const transferEligible = hasNewerSalary && finance.remainingPaise > 0 && state.dismissedTransferPromptId !== record.id;
+  const transferEligible = hasNewerSalary && finance.combinedRemainingPaise > 0 && state.dismissedTransferPromptId !== record.id;
   const transferPrompt = $('salaryTransferPrompt');
   transferPrompt.hidden = !transferEligible;
   if (transferEligible) {
-    $('salaryTransferMessage').textContent = `${formatMoney(finance.remaining)} remains from ${formatMonthKey(record.monthKey)}. Move it to Savings?`;
+    $('salaryTransferMessage').textContent = `${formatMoney(finance.combinedRemaining)} remains from ${formatMonthKey(record.monthKey)}. Move it to Savings?`;
     $('salaryTransferButton').dataset.salaryTransfer = record.id;
     $('salaryTransferLater').dataset.salaryTransferLater = record.id;
   }
@@ -713,10 +725,11 @@ function renderSalaryPage() {
         actionAttribute: 'data-empty-salary="true"'
       });
   $('exportSalaryCsv').hidden = state.salaries.length === 0;
-  const extraTotal = monthExtraIncome.reduce((sum, entry) => sum + Number(entry.amount), 0);
+  const extraTotal = monthExtraIncome.filter(entry => !entry.reversedAt).reduce((sum, entry) => sum + Number(entry.amount), 0);
   $('extraIncomeTotal').textContent = `${formatMoney(extraTotal)} received`;
-  $('extraIncomeList').innerHTML = monthExtraIncome.length
-    ? `<div class="list-card">${[...monthExtraIncome].sort((a, b) => b.date.localeCompare(a.date)).map(extraIncomeRowMarkup).join('')}</div>`
+  const monthIncomeHistory = [...monthExtraIncome, ...unassignedHistory].sort((a, b) => b.date.localeCompare(a.date));
+  $('extraIncomeList').innerHTML = monthIncomeHistory.length
+    ? `<div class="list-card">${monthIncomeHistory.map(extraIncomeRowMarkup).join('')}</div>`
     : `<p class="savings-month__empty">No other income added in ${escapeHTML(label)}.</p>`;
 }
 
@@ -759,7 +772,42 @@ function usePreviousSalary() {
 function extraIncomeRowMarkup(record) {
   const remaining = extraIncomeRemaining(record, state.savings);
   const desc = record.description || record.source;
-  return `<article class="entry"><div class="entry__main"><span class="entry__avatar entry__avatar--income">${ICON('rupee')}</span><span class="entry__text"><span class="entry__title">${escapeHTML(desc)}</span><span class="entry__meta">${escapeHTML(formatDate(record.date))} · ${escapeHTML(record.source)}</span></span><span class="entry__amount">${escapeHTML(formatMoney(remaining))} left</span></div><button class="entry__menu" type="button" data-extra-income-edit="${escapeHTML(record.id)}" aria-label="Edit ${escapeHTML(desc)}">${ICON('pencil')}</button><button class="entry__menu" type="button" data-extra-income-delete="${escapeHTML(record.id)}" aria-label="Delete ${escapeHTML(desc)}">${ICON('trash')}</button></article>`;
+  const salary = state.salaries.find(item => item.id === record.salaryRecordId);
+  const poolLabel = salary ? `For ${formatMonthKey(salary.monthKey)} salary` : 'Salary month needs review';
+  const reversedLabel = record.reversedAt ? ' · Reversed' : '';
+  const amountLabel = record.reversedAt ? `${formatMoney(record.amount)} reversed` : `${formatMoney(remaining)} left`;
+  const actions = record.reversedAt
+    ? ''
+    : `<button class="entry__menu" type="button" data-extra-income-edit="${escapeHTML(record.id)}" aria-label="Edit ${escapeHTML(desc)}">${ICON('pencil')}</button><button class="entry__menu" type="button" data-extra-income-delete="${escapeHTML(record.id)}" aria-label="Delete ${escapeHTML(desc)}">${ICON('trash')}</button><button class="entry__menu entry__menu--undo" type="button" data-extra-income-undo="${escapeHTML(record.id)}" aria-label="Undo ${escapeHTML(formatMoney(record.amount))} extra income">${ICON('refresh')}</button>`;
+  return `<article class="entry"><div class="entry__main"><span class="entry__avatar entry__avatar--income">${ICON('rupee')}</span><span class="entry__text"><span class="entry__title">${escapeHTML(desc)}</span><span class="entry__meta">${escapeHTML(formatDate(record.date))} · ${escapeHTML(record.source)} · ${escapeHTML(poolLabel + reversedLabel)}</span></span><span class="entry__amount ${record.reversedAt ? 'entry__amount--reversed' : ''}">${escapeHTML(amountLabel)}</span></div>${actions}</article>`;
+}
+
+function populateExtraIncomeSalarySelect(record = null) {
+  const select = $('extraIncomeSalarySelect');
+  const salaryIds = new Set(state.salaries.map(salary => salary.id));
+  const salaries = [...state.salaries].sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+  const defaultSalary = findSalaryForMonth(state.salaries, state.salaryMonth);
+  const selectedId = record?.salaryRecordId && salaryIds.has(record.salaryRecordId)
+    ? record.salaryRecordId
+    : record ? '' : defaultSalary?.id ?? '';
+  select.innerHTML = [
+    '<option value="">Choose a salary month</option>',
+    ...salaries.map(salary => `<option value="${escapeHTML(salary.id)}">${escapeHTML(formatMonthKey(salary.monthKey))}</option>`)
+  ].join('');
+  select.value = selectedId;
+
+  const allocated = record ? state.savings.reduce((sum, saving) => sum + (saving.extraIncomeAllocations ?? [])
+    .filter(item => item.extraIncomeRecordId === record.id).reduce((subtotal, item) => subtotal + item.amountPaise, 0), 0) : 0;
+  const canMove = !allocated || !salaryIds.has(record?.salaryRecordId);
+  select.disabled = !salaries.length || !canMove;
+  $('extraIncomePoolHint').textContent = !salaries.length
+    ? 'Add a salary month first, then record income for that month.'
+    : !record && !defaultSalary
+      ? `There is no salary record for ${formatMonthKey(state.salaryMonth)}. Add one first, or choose an existing salary month.`
+    : allocated && record?.salaryRecordId
+      ? 'This income has funded savings, so its salary month is locked.'
+      : 'Choose the salary pool this income belongs to. The received date stays unchanged.';
+  $('saveExtraIncomeButton').disabled = !salaries.length;
 }
 
 function openExtraIncomeSheet(recordId = null) {
@@ -769,6 +817,7 @@ function openExtraIncomeSheet(recordId = null) {
   $('extraIncomeAmount').value = record ? Number(record.amount).toFixed(2) : '';
   $('extraIncomeDate').value = record?.date ?? defaultSavingDate(state.salaryMonth);
   $('extraIncomeDate').max = localToday();
+  populateExtraIncomeSalarySelect(record);
   $('extraIncomeSource').value = record?.source ?? 'freelancing';
   $('extraIncomeDescription').value = record?.description ?? '';
   $('extraIncomeFormError').hidden = true;
@@ -778,16 +827,29 @@ function openExtraIncomeSheet(recordId = null) {
 async function saveExtraIncome(event) {
   event.preventDefault();
   const id = state.editingExtraIncomeId;
-  const input = { amount: $('extraIncomeAmount').value, date: $('extraIncomeDate').value, source: $('extraIncomeSource').value, description: $('extraIncomeDescription').value };
+  const input = { amount: $('extraIncomeAmount').value, date: $('extraIncomeDate').value, salaryRecordId: $('extraIncomeSalarySelect').value, source: $('extraIncomeSource').value, description: $('extraIncomeDescription').value };
   const button = $('saveExtraIncomeButton');
   button.disabled = true;
   try {
-    if (id) await state.ledgerRepo.updateExtraIncome(id, input);
-    else await state.ledgerRepo.createExtraIncome(input);
+    const saved = id
+      ? await state.ledgerRepo.updateExtraIncome(id, input)
+      : await state.ledgerRepo.createExtraIncome(input);
     await refreshAll();
+    const salary = state.salaries.find(item => item.id === saved.salaryRecordId);
+    if (salary && state.salaryMonth !== salary.monthKey) {
+      state.salaryMonth = salary.monthKey;
+      writeRoute('replace');
+    }
     closeDialog($('extraIncomeSheet'));
     render();
-    showToast(id ? 'Extra income updated' : 'Extra income added', { tone: 'success' });
+    if (id) {
+      showToast('Extra income updated', { tone: 'success' });
+    } else {
+      showToast(`${formatMoney(saved.amount)} extra income added to ${formatMonthKey(salary?.monthKey ?? state.salaryMonth)} salary`, {
+        tone: 'success', actionLabel: 'Undo', duration: 10000,
+        onAction: () => undoFinancialTransaction('income', saved.id)
+      });
+    }
   } catch (error) {
     $('extraIncomeFormError').textContent = error.message || 'Unable to save extra income.';
     $('extraIncomeFormError').hidden = false;
@@ -927,6 +989,7 @@ function renderSavingsTotal({ groups, total, currentKey }) {
 
 function savingsActivity(records) {
   return records.reduce((totals, record) => {
+    if (record.reversedAt) return totals;
     const amount = Math.round(Number(record.amount) * 100);
     const type = record.type ?? 'contribution';
     if (type === 'salary_balance_transfer') totals.transferPaise += amount;
@@ -950,12 +1013,12 @@ function savingRowMarkup(record) {
       extraIncomePaise ? `Other income ${formatMoney(fromPaise(extraIncomePaise))}` : ''
     ].filter(Boolean).join(' + ');
   }
-  const meta = `${escapeHTML(formatDate(record.date))} · ${sourceLabel}`;
+  const meta = `${escapeHTML(formatDate(record.date))} · ${sourceLabel}${record.reversedAt ? ' · Reversed' : ''}`;
   const amount = escapeHTML(formatMoney(record.amount));
-  const signedAmount = type === 'withdrawal' ? `−${amount}` : `+${amount}`;
+  const signedAmount = record.reversedAt ? `↶ ${amount}` : type === 'withdrawal' ? `−${amount}` : `+${amount}`;
   const action = type === 'withdrawal'
     ? `<button class="entry__main" type="button" data-saving-expense="${escapeHTML(record.expenseId ?? '')}" aria-label="Open linked expense, ${amount}, ${meta}">`
-    : `<button class="entry__main" type="button" data-saving-edit="${safeId}" aria-label="Edit ${title}, ${amount}, ${meta}">`;
+    : `<button class="entry__main" type="button" ${record.reversedAt ? '' : `data-saving-edit="${safeId}"`} aria-label="${record.reversedAt ? 'Reversed' : 'Edit'} ${title}, ${amount}, ${meta}">`;
 
   return `<article class="entry">
     ${action}
@@ -964,7 +1027,7 @@ function savingRowMarkup(record) {
         <span class="entry__title">${title}</span>
         <span class="entry__meta">${meta}</span>
       </span>
-      <span class="entry__amount ${type === 'withdrawal' ? 'entry__amount--withdrawal' : 'entry__amount--saving'}">${signedAmount}</span>
+      <span class="entry__amount ${record.reversedAt ? 'entry__amount--reversed' : type === 'withdrawal' ? 'entry__amount--withdrawal' : 'entry__amount--saving'}">${signedAmount}</span>
     </button>
     <button class="entry__menu" type="button" data-saving-menu="${safeId}" aria-label="Actions for ${title}" aria-haspopup="dialog">
       ${ICON('more')}
@@ -1225,11 +1288,11 @@ function openExpenseSheet(id = null) {
 
 function updateExpenseSourceOptions(record = state.expenses.find(item => item.id === state.editingExpenseId) ?? null) {
   const activeSalary = findActiveSalary(state.salaries);
-  const salaryPool = activeSalary ? computeSalaryPool(activeSalary, state.expenses, state.savings) : null;
+  const salaryPool = activeSalary ? computeSalaryPool(activeSalary, state.expenses, state.savings, state.extraIncome) : null;
   const linkedWithdrawal = record ? state.savings.find(item => item.type === 'withdrawal' && item.expenseId === record.id) : null;
   const savingsBalance = computeSavingsBalance(state.savings).balancePaise + Math.round(Number(linkedWithdrawal?.amount ?? 0) * 100);
   $('salaryAvailableLabel').textContent = salaryPool
-    ? `${formatMoney(salaryPool.remaining)} available`
+    ? `${formatMoney(salaryPool.combinedRemaining)} available`
     : 'No salary pool';
   $('savingsAvailableLabel').textContent = `${formatMoney(fromPaise(savingsBalance))} available`;
   $('paidFromSalary').disabled = !activeSalary && !(record?.salaryRecordId);
@@ -1483,8 +1546,8 @@ async function handleSalarySubmit(event) {
     render();
     showToast(wasEditing ? 'Salary updated.' : 'Salary saved.');
     if (!wasEditing && previousActiveSalary && previousActiveSalary.id !== saved.id) {
-      const pool = computeSalaryPool(previousActiveSalary, state.expenses, state.savings);
-      if (pool.remainingPaise > 0) promptSalaryBalanceTransfer(previousActiveSalary, pool.remainingPaise);
+      const pool = computeSalaryPool(previousActiveSalary, state.expenses, state.savings, state.extraIncome);
+      if (pool.combinedRemainingPaise > 0) promptSalaryBalanceTransfer(previousActiveSalary, pool.combinedRemainingPaise);
     }
   } catch (error) {
     if (error instanceof ValidationError) {
@@ -1521,7 +1584,10 @@ async function moveSalaryBalanceToSavings(salaryId) {
     const record = await state.ledgerRepo.transferSalaryBalance(salaryId);
     await refreshAll();
     render();
-    showToast(`${formatMoney(record.amount)} moved to Savings.`);
+    showToast(`${formatMoney(record.amount)} transferred to savings`, {
+      tone: 'success', actionLabel: 'Undo', duration: 10000,
+      onAction: () => undoFinancialTransaction('saving', record.id)
+    });
   } catch (error) {
     const message = error instanceof InsufficientSalaryBalanceError
       ? 'There is no positive balance left to transfer.'
@@ -1624,7 +1690,14 @@ async function handleSavingSubmit(event) {
     writeRoute('replace');
     if (isSameDialogSession($('savingSheet'), session)) closeSavingSheet();
     render();
-    showToast(wasEditing ? 'Savings updated' : input.sourceType === 'salary' ? 'Salary contribution saved' : `${input.sourceType[0].toUpperCase()}${input.sourceType.slice(1)} added to savings`, { tone: 'success' });
+    if (wasEditing) {
+      showToast('Savings updated', { tone: 'success' });
+    } else {
+      showToast(`${formatMoney(saved.amount)} added to savings`, {
+        tone: 'success', actionLabel: 'Undo', duration: 10000,
+        onAction: () => undoFinancialTransaction('saving', saved.id)
+      });
+    }
   } catch (error) {
     if (error instanceof ValidationError) {
       showFieldGroupErrors(SAVING_FIELDS, error.errors);
@@ -1660,12 +1733,12 @@ function setSavingSaving(isSaving, wasEditing) {
 
 function updateSavingSourceHint() {
   const salary = $('savingSourceInput').value === 'salary';
-  const salaryRemaining = findActiveSalary(state.salaries)
-    ? Math.max(0, computeSalaryPool(findActiveSalary(state.salaries), state.expenses, state.savings).remaining)
+  const activeSalary = findActiveSalary(state.salaries);
+  const salaryAvailable = activeSalary
+    ? Math.max(0, computeSalaryPool(activeSalary, state.expenses, state.savings, state.extraIncome).combinedRemainingPaise)
     : 0;
-  const extraRemaining = state.extraIncome.reduce((sum, item) => sum + extraIncomeRemaining(item, state.savings), 0);
   $('savingSourceHint').textContent = salary
-    ? `Salary is used first, then extra income. ${formatMoney(salaryRemaining + extraRemaining)} available.`
+    ? `Salary is used first, then this salary month’s extra income. ${formatMoney(fromPaise(salaryAvailable))} available.`
     : 'This adds to Savings without changing your salary balance.';
 }
 
@@ -1739,7 +1812,7 @@ function openSalaryActions(id) {
 function confirmDeleteSalary(record) {
   openActionSheet({
     title: 'Remove this salary?',
-    message: `The ${formatMonthKey(record.monthKey)} salary pool can only be removed when no expenses or savings are allocated to it.`,
+    message: `The ${formatMonthKey(record.monthKey)} salary pool can only be removed when no expenses, savings, or extra income are linked to it.`,
     actions: [{
       label: 'Remove salary',
       icon: 'trash',
@@ -1783,6 +1856,10 @@ function openSavingActions(id) {
   }
 
   const type = record.type ?? 'contribution';
+  if (record.reversedAt) {
+    showToast('This savings transaction has already been reversed.', { tone: 'info' });
+    return;
+  }
   if (type === 'withdrawal') {
     showToast('This withdrawal follows its linked expense. Edit or delete that expense to change it.');
     return;
@@ -1793,6 +1870,7 @@ function openSavingActions(id) {
     message: `${formatDate(record.date)} · ${formatMoney(record.amount)}`,
     actions: [
       { label: 'Edit savings', icon: 'pencil', onSelect: () => openSavingSheet(record.id) },
+      { label: 'Undo savings transaction', icon: 'refresh', tone: 'danger', onSelect: () => confirmReverseSaving(record) },
       {
         label: 'Delete savings',
         icon: 'trash',
@@ -1801,6 +1879,65 @@ function openSavingActions(id) {
       }
     ]
   });
+}
+
+function confirmReverseSaving(record) {
+  openActionSheet({
+    title: 'Undo this savings transaction?',
+    message: `${formatMoney(record.amount)} will be reversed using the original funding allocations. If later transactions used this money, reverse those first.`,
+    actions: [{ label: 'Undo transaction', icon: 'refresh', tone: 'danger', onSelect: () => undoFinancialTransaction('saving', record.id) }]
+  });
+}
+
+function confirmReverseExtraIncome(record) {
+  const salary = state.salaries.find(item => item.id === record.salaryRecordId);
+  openActionSheet({
+    title: 'Undo this extra income?',
+    message: `${formatMoney(record.amount)} received ${formatDate(record.date)} for ${salary ? formatMonthKey(salary.monthKey) : 'its linked salary'} will be reversed. Reverse savings entries that used it first.`,
+    actions: [{ label: 'Undo extra income', icon: 'refresh', tone: 'danger', onSelect: () => undoFinancialTransaction('income', record.id) }]
+  });
+}
+
+function confirmEraseAllData() {
+  openActionSheet({
+    title: 'Erase all Spendly data?',
+    message: 'This permanently deletes all expenses, salary records, extra income, savings history, and local app data from this browser. This cannot be undone. Download a backup first if you may need this information.',
+    actions: [{ label: 'Erase all data', icon: 'trash', tone: 'danger', onSelect: eraseAllData }]
+  });
+}
+
+async function eraseAllData() {
+  try {
+    await state.ledgerRepo.clearAllData();
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(INSTALL_DISMISSED_KEY);
+    } catch { /* IndexedDB was cleared successfully. */ }
+    state.lastBackupAt = null;
+    state.backupReminderDismissedUntil = null;
+    state.onboardingDone = false;
+    state.salaryMonth = currentMonthKey();
+    state.savingsMonth = currentMonthKey();
+    state.savingsTab = 'month';
+    await refreshAll();
+    render();
+    showToast('All Spendly data erased.', { tone: 'success' });
+  } catch (error) {
+    console.error('Could not erase all Spendly data:', error);
+    showToast('Could not erase all data. No records were changed.', { tone: 'error', duration: 6500 });
+  }
+}
+
+async function undoFinancialTransaction(kind, id) {
+  try {
+    if (kind === 'income') await state.ledgerRepo.reverseExtraIncome(id);
+    else await state.ledgerRepo.reverseSaving(id);
+    await refreshAll();
+    render();
+    showToast(kind === 'income' ? 'Extra income reversed.' : 'Savings transaction reversed.', { tone: 'success' });
+  } catch (error) {
+    showToast(error.message || 'Could not reverse this transaction. No records were changed.', { tone: 'error', duration: 6500 });
+  }
 }
 
 function confirmDeleteSaving(record) {
@@ -1882,15 +2019,16 @@ function exportCsv() {
 
 function exportSalaryCsv() {
   const rows = [
-    ['Month', 'Salary (INR)', 'Expenses (INR)', 'Savings from salary (INR)', 'Remaining (INR)'],
+    ['Month', 'Salary (INR)', 'Extra income (INR)', 'Expenses (INR)', 'Savings (INR)', 'Remaining (INR)'],
     ...[...state.salaries].sort((a, b) => a.monthKey.localeCompare(b.monthKey)).map(salary => {
-      const pool = computeSalaryPool(salary, state.expenses, state.savings);
+      const pool = computeSalaryPool(salary, state.expenses, state.savings, state.extraIncome);
       return [
         formatMonthKey(salary.monthKey),
         Number(salary.amount).toFixed(2),
+        fromPaise(pool.extraIncomePaise).toFixed(2),
         pool.expenseTotal.toFixed(2),
-        fromPaise(pool.contributionPaise + pool.transferPaise).toFixed(2),
-        pool.remaining.toFixed(2)
+        pool.poolSavingsTotal.toFixed(2),
+        pool.combinedRemaining.toFixed(2)
       ];
     })
   ];
@@ -2523,6 +2661,11 @@ function bindEvents() {
     if (button) openExtraIncomeSheet(button.dataset.extraIncomeEdit);
     const remove = event.target.closest('[data-extra-income-delete]');
     if (remove) void removeExtraIncome(remove.dataset.extraIncomeDelete);
+    const undo = event.target.closest('[data-extra-income-undo]');
+    if (undo) {
+      const record = state.extraIncome.find(item => item.id === undo.dataset.extraIncomeUndo);
+      if (record) confirmReverseExtraIncome(record);
+    }
   });
 
   const savingsTablist = $('savingsTabMonth').parentElement;
@@ -2647,6 +2790,7 @@ function bindEvents() {
     }
   });
   $('restoreBackup').addEventListener('click', () => $('fileInput').click());
+  $('eraseAllData').addEventListener('click', confirmEraseAllData);
   $('fileInput').addEventListener('change', event => {
     void handleRestoreFile(event.target.files?.[0]);
   });

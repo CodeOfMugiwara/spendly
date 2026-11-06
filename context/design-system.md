@@ -139,3 +139,7 @@ Rules: one primary action per page; no page repeats another page’s main job; c
 - The Salary comparison is a single muted line inside the existing income card. It compares calendar-date activity only and appears only when the previous month has data.
 - Savings rows show the salary and other-income amounts when a contribution used both. The existing single-line meta truncation keeps the row compact on phones; the button’s accessible name contains the full details.
 - The first-use guide is an opaque card with three direct actions. It stays below the monthly overview and disappears after salary has existed, without adding a modal tour.
+
+## Addendum — Salary balance 3.6
+
+The existing forest-green Salary card keeps Remaining Balance as its largest value and retains the three Salary, Savings and Expenses details. Remaining Balance now combines the regular salary pool with Extra Income assigned to that salary record; the Salary detail itself continues to show regular salary only. Extra Income's separate history remains below Salary History, with its actual received date visible alongside its assigned salary month.

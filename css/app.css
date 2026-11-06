@@ -1040,6 +1040,19 @@ svg {
   height: 19px;
 }
 
+.entry__menu--undo {
+  width: 44px;
+  padding: 0;
+  color: var(--green-700);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.entry__amount--reversed {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
 .entry__main:active,
 .entry__menu:active {
   background: var(--surface-soft);
@@ -1451,6 +1464,15 @@ svg {
 
 .data__actions {
   margin-top: 13px;
+}
+
+.data__action--danger .data__icon {
+  color: var(--danger, #a43e32);
+  background: rgba(164, 62, 50, 0.08);
+}
+
+.data__action--danger .data__text strong {
+  color: var(--danger, #a43e32);
 }
 
 .data__action {
@@ -2459,30 +2481,6 @@ svg {
   letter-spacing: -0.045em;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-}
-
-.extra-income-balance {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 10px 0 20px;
-  color: rgba(245, 251, 247, .78);
-}
-
-.extra-income-balance strong {
-  color: #fff;
-  font-size: clamp(24px, 6vw, 30px);
-  line-height: 1.1;
-  letter-spacing: -.045em;
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-}
-
-.extra-income-balance span {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .045em;
-  text-transform: uppercase;
 }
 
 .income-card__balance-label {

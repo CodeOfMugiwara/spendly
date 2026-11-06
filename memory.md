@@ -340,3 +340,17 @@ Verification: `npm test` passed 57/57; `npm run test:e2e` passed 23/23, includin
 The Salary page now filters the Other income balance, received total and history rows to the selected month using the income record's date. Savings contributions still draw from all available Extra Income across months. Added browser regression coverage for month switching; bumped app to 3.5.1 and service-worker cache to v18.
 
 Verification for 3.5.1: 57 unit tests and 23 browser scenarios pass. The month-switch regression confirms Other income appears only in its dated month and the add form defaults to the selected month. Axe reports no serious or critical violations on the main pages or expense sheet.
+
+## 13. Version 3.6.0 — 6 November 2026 — Explicit salary-linked Extra Income
+
+Extra Income now stores a stable `salaryRecordId` independently from its actual `date`. The Salary page shows a combined Remaining Balance and keeps Salary, Savings and Expenses as separate summary values. Extra Income history is grouped by assigned salary month and continues showing received dates. The form lists existing salary months; without a salary record for the selected month, the user must add one or choose an existing month.
+
+Savings contributions and salary balance transfers use regular salary first, then only income linked to that same salary record. Allocated Extra Income cannot be moved to another pool or deleted; salary records linked to income cannot be removed. DB v6 adds an index; v5 records without a salary ID stay intact and marked `needs_review`, with explicit manual assignment. Backups stay v5 and older records without a link stay reviewable.
+
+Verification: 59 unit tests and 24 browser scenarios pass, including the v5-to-v6 migration, different received/allocation months, combined balance, salary-first allocations, edit/delete recalculation, offline use and axe accessibility checks.
+
+## Version 3.7.0 — 6 November 2026 — Transaction reversals and erase-all
+
+Income, Savings contributions and salary-balance transfers now expose a 10-second Undo toast action and a confirmed reversal action in history. Reversals preserve original ledger rows, timestamps, salary links and exact paise funding allocations with `reversedAt` and `reversalId` fields. Active allocations and later use are checked atomically; duplicate reversals are rejected. The Your data page can permanently erase all IndexedDB stores and the legacy localStorage copy after confirmation. IndexedDB remains v6, JSON backup v5 and service-worker shell cache v20.
+
+Verification: `npm test` passed 60/60. `npm run test:e2e` passed 25/25, including offline add/undo, refresh history undo, mixed salary/income source restoration, dependency and negative-balance guards, duplicate prevention, full erase confirmation, responsive checks and axe accessibility checks. Changes are not committed.
