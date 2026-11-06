@@ -1239,8 +1239,31 @@ svg {
 
 .salary-settings {
   position: absolute;
-  top: 2px;
+  top: 0;
   right: 0;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--forest);
+  box-shadow: 0 2px 8px rgba(8, 52, 29, 0.08);
+}
+
+.salary-settings .icon {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.9;
+}
+
+.salary-settings:hover {
+  background: #eaf6ee;
+  box-shadow: 0 3px 10px rgba(8, 52, 29, 0.13);
+}
+
+.salary-settings:focus-visible {
+  outline: 3px solid rgba(23, 107, 58, 0.28);
+  outline-offset: 3px;
 }
 
 .eyebrow {
