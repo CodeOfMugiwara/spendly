@@ -1232,6 +1232,17 @@ svg {
   padding: 8px 3px 18px;
 }
 
+.page-head--salary {
+  position: relative;
+  padding-right: 52px;
+}
+
+.salary-settings {
+  position: absolute;
+  top: 2px;
+  right: 0;
+}
+
 .eyebrow {
   font-size: 9.5px;
   font-weight: 700;

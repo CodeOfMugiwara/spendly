@@ -54,6 +54,10 @@
     <symbol id="i-chevron-down" viewBox="0 0 24 24">
       <path d="m6 9.5 6 6 6-6"/>
     </symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24">
+      <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/>
+      <path d="M19.4 13.5a7.2 7.2 0 0 0 0-3l1.1-.9-1.5-2.6-1.4.5a7.8 7.8 0 0 0-2.6-1.5l-.3-1.5h-3l-.3 1.5a7.8 7.8 0 0 0-2.6 1.5l-1.4-.5-1.5 2.6 1.1.9a7.2 7.2 0 0 0 0 3l-1.1.9 1.5 2.6 1.4-.5a7.8 7.8 0 0 0 2.6 1.5l.3 1.5h3l.3-1.5a7.8 7.8 0 0 0 2.6-1.5l1.4.5 1.5-2.6-1.1-.9Z"/>
+    </symbol>
     <symbol id="i-x" viewBox="0 0 24 24">
       <path d="M6 6l12 12M18 6 6 18"/>
     </symbol>
@@ -192,64 +196,6 @@
           </div>
         </section>
 
-        <section class="section" id="financeSection" aria-labelledby="financeTitle">
-          <div class="section__head">
-            <h2 class="section__title" id="financeTitle">Monthly overview</h2>
-            <div class="month-stepper" role="group" aria-label="Choose a month">
-              <button class="month-stepper__button is-prev" type="button" id="financePrevMonth" aria-label="Previous month">
-                <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
-              </button>
-              <span class="month-stepper__label" id="financeMonthLabel" aria-live="polite">November 2026</span>
-              <button class="month-stepper__button" type="button" id="financeNextMonth" aria-label="Next month">
-                <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
-              </button>
-            </div>
-          </div>
-
-          <div class="finance" id="financeCard">
-            <div class="finance__grid">
-              <div class="finance__cell">
-                <span class="finance__label">Salary</span>
-                <strong class="finance__value" id="financeSalary">Not set</strong>
-              </div>
-              <div class="finance__cell">
-                <span class="finance__label">Expenses</span>
-                <strong class="finance__value" id="financeExpenses">₹0.00</strong>
-              </div>
-              <div class="finance__cell">
-                <span class="finance__label">Savings</span>
-                <strong class="finance__value" id="financeSavings">₹0.00</strong>
-              </div>
-            </div>
-            <div class="finance__balance" id="financeBalance">
-              <div class="finance__balance-text">
-                <span class="finance__balance-label">Remaining balance</span>
-                <strong class="finance__balance-value" id="financeRemainingValue">—</strong>
-              </div>
-              <p class="finance__note" id="financeRemainingNote">Add this month’s salary to see what is left.</p>
-            </div>
-          </div>
-
-          <div class="shortcuts">
-            <button class="shortcut" type="button" data-goto="salary">
-              <span class="shortcut__icon" aria-hidden="true"><svg class="icon"><use href="#i-rupee"></use></svg></span>
-              <span class="shortcut__text">
-                <strong>Salary</strong>
-                <small id="shortcutSalary">Not set for this month</small>
-              </span>
-              <svg class="icon shortcut__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
-            </button>
-            <button class="shortcut" type="button" data-goto="savings">
-              <span class="shortcut__icon shortcut__icon--soft" aria-hidden="true"><svg class="icon"><use href="#i-savings"></use></svg></span>
-              <span class="shortcut__text">
-                <strong>Savings</strong>
-                <small id="shortcutSavings">₹0.00 saved this month</small>
-              </span>
-              <svg class="icon shortcut__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
-            </button>
-          </div>
-        </section>
-
         <section class="onboarding" id="onboardingCard" aria-labelledby="onboardingTitle" hidden>
           <h2 id="onboardingTitle">Start with these three steps</h2>
           <ol>
@@ -292,17 +238,6 @@
           </button>
         </section>
 
-        <section class="section" aria-labelledby="recentTitle">
-          <div class="section__head">
-            <h2 class="section__title" id="recentTitle">Recent expenses</h2>
-            <button class="text-button" type="button" id="seeAllButton">
-              See all
-              <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
-            </button>
-          </div>
-          <div class="list-card" id="recentList"></div>
-        </section>
-
         <section class="panel week" aria-labelledby="weekTitle">
           <div class="panel__head">
             <div>
@@ -313,6 +248,17 @@
           </div>
           <div class="week__bars" id="weekBars" role="img" aria-label="Daily spending this week"></div>
           <p class="week__empty" id="weekEmpty">No spending recorded this week.</p>
+        </section>
+
+        <section class="section" aria-labelledby="recentTitle">
+          <div class="section__head">
+            <h2 class="section__title" id="recentTitle">Recent expenses</h2>
+            <button class="text-button" type="button" id="seeAllButton">
+              See all
+              <svg class="icon" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+          </div>
+          <div class="list-card" id="recentList"></div>
         </section>
 
         <aside class="install" id="installCard" hidden>
@@ -372,62 +318,18 @@
           </div>
           <div id="historyList"></div>
         </section>
-
-        <section class="panel data" aria-labelledby="dataTitle">
-          <div class="panel__head">
-            <div>
-              <h2 class="panel__title" id="dataTitle">Your data</h2>
-              <p class="panel__sub">Backups are files you keep. Nothing is uploaded.</p>
-            </div>
-          </div>
-          <div class="data__actions">
-            <button class="data__action" type="button" id="exportCsv">
-              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-table"></use></svg></span>
-              <span class="data__text"><strong>Export CSV</strong><small>Expenses, for Excel or Google Sheets</small></span>
-              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
-            </button>
-            <button class="data__action" type="button" id="downloadBackup">
-              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-download"></use></svg></span>
-              <span class="data__text"><strong>Download backup</strong><small>Expenses, income and savings as JSON</small></span>
-              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
-            </button>
-            <button class="data__action" type="button" id="restoreBackup">
-              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-upload"></use></svg></span>
-              <span class="data__text"><strong>Restore backup</strong><small>Replace local data from a JSON file</small></span>
-              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
-            </button>
-            <button class="data__action data__action--danger" type="button" id="eraseAllData">
-              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-trash"></use></svg></span>
-              <span class="data__text"><strong>Erase all data</strong><small>Permanently remove all data from this browser</small></span>
-              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
-            </button>
-            <input id="fileInput" type="file" accept="application/json,.json" hidden>
-          </div>
-          <aside class="backup-reminder" id="backupReminder" aria-labelledby="backupReminderTitle" hidden>
-            <div class="backup-reminder__copy">
-              <strong id="backupReminderTitle">Keep a copy of your data</strong>
-              <span>Spendly is stored in this browser. Save a backup file in another place.</span>
-            </div>
-            <div class="backup-reminder__actions">
-              <button type="button" id="backupNow">Download backup</button>
-              <button type="button" id="dismissBackupReminder">Remind me later</button>
-            </div>
-          </aside>
-          <p class="storage-health" id="storageHealth">Your data is stored in this browser and is not uploaded.</p>
-        </section>
-
-        <p class="footnote">
-          Everything is stored privately in IndexedDB in this browser, for this site address. It is never uploaded and does not sync between devices. Export a backup to move it somewhere else.
-        </p>
       </section>
 
       <!-- ================================================================== -->
       <!-- Salary                                                             -->
       <!-- ================================================================== -->
       <section class="view" id="view-salary" aria-labelledby="salaryTitle" hidden>
-        <header class="page-head">
+        <header class="page-head page-head--salary">
           <p class="eyebrow">Income</p>
           <h1 class="page-head__title" id="salaryTitle" tabindex="-1">Salary</h1>
+          <button class="icon-button salary-settings" type="button" id="openDataSettings" aria-label="Your data settings" aria-haspopup="dialog">
+            <svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg>
+          </button>
           <p class="page-head__sub">What you earned each month — one record per month.</p>
         </header>
 
@@ -870,6 +772,64 @@
       <p class="action__message" id="actionMessage" hidden></p>
       <div class="action__list" id="actionList"></div>
       <button class="button button--quiet button--block" type="button" id="actionCancel">Cancel</button>
+    </div>
+  </dialog>
+
+  <dialog class="sheet" id="dataSettingsSheet" aria-labelledby="dataSettingsTitle">
+    <div class="sheet__grip" aria-hidden="true"></div>
+    <header class="sheet__head">
+      <button class="icon-button" type="button" id="closeDataSettings" aria-label="Close your data settings"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>
+      <div class="sheet__titles"><h2 class="sheet__title" id="dataSettingsTitle">Your data</h2><p class="sheet__sub">Backups, exports and storage</p></div>
+      <span class="sheet__spacer" aria-hidden="true"></span>
+    </header>
+    <div class="sheet__body">
+        <section class="panel data" aria-labelledby="dataTitle">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="dataTitle">Your data</h2>
+              <p class="panel__sub">Backups are files you keep. Nothing is uploaded.</p>
+            </div>
+          </div>
+          <div class="data__actions">
+            <button class="data__action" type="button" id="exportCsv">
+              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-table"></use></svg></span>
+              <span class="data__text"><strong>Export CSV</strong><small>Expenses, for Excel or Google Sheets</small></span>
+              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <button class="data__action" type="button" id="downloadBackup">
+              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-download"></use></svg></span>
+              <span class="data__text"><strong>Download backup</strong><small>Expenses, income and savings as JSON</small></span>
+              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <button class="data__action" type="button" id="restoreBackup">
+              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-upload"></use></svg></span>
+              <span class="data__text"><strong>Restore backup</strong><small>Replace local data from a JSON file</small></span>
+              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <button class="data__action data__action--danger" type="button" id="eraseAllData">
+              <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-trash"></use></svg></span>
+              <span class="data__text"><strong>Erase all data</strong><small>Permanently remove all data from this browser</small></span>
+              <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            </button>
+            <input id="fileInput" type="file" accept="application/json,.json" hidden>
+          </div>
+          <aside class="backup-reminder" id="backupReminder" aria-labelledby="backupReminderTitle" hidden>
+            <div class="backup-reminder__copy">
+              <strong id="backupReminderTitle">Keep a copy of your data</strong>
+              <span>Spendly is stored in this browser. Save a backup file in another place.</span>
+            </div>
+            <div class="backup-reminder__actions">
+              <button type="button" id="backupNow">Download backup</button>
+              <button type="button" id="dismissBackupReminder">Remind me later</button>
+            </div>
+          </aside>
+          <p class="storage-health" id="storageHealth">Your data is stored in this browser and is not uploaded.</p>
+        </section>
+
+        <p class="footnote">
+          Everything is stored privately in IndexedDB in this browser, for this site address. It is never uploaded and does not sync between devices. Export a backup to move it somewhere else.
+        </p>
+
     </div>
   </dialog>
 

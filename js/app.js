@@ -13,7 +13,6 @@
 import {
   PERIODS,
   addDays,
-  computeMonthlyFinance,
   computeSalaryPool,
   computeSavingsBalance,
   extraIncomeRemaining,
@@ -39,7 +38,6 @@ import {
   relativeDayLabel,
   savingsForMonth,
   shiftMonth,
-  shortMonthLabel,
   sortExpenses,
   sumSavings,
   summarize,
@@ -312,7 +310,6 @@ function render() {
   const summary = summarize(state.expenses, new Date());
   $('view-dashboard').classList.toggle('is-empty', state.expenses.length === 0);
   renderHero(summary);
-  renderFinance();
   renderGlance(summary);
   renderWeek(summary.week);
   renderRecent(summary.recent);
@@ -383,68 +380,6 @@ function financeMonthStatus(monthKey) {
   const current = currentMonthKey();
   if (monthKey === current) return 'Current month';
   return monthKey < current ? 'Past month' : 'Future month';
-}
-
-function financeFor(monthKey) {
-  const salary = findSalaryForMonth(state.salaries, monthKey);
-  if (!salary) return computeMonthlyFinance(monthKey, { expenses: state.expenses, savings: state.savings });
-  const pool = computeSalaryPool(salary, state.expenses, state.savings);
-  const savingsPaise = pool.contributionPaise + pool.transferPaise;
-  return {
-    ...pool,
-    monthKey,
-    label: formatMonthKey(monthKey),
-    salary,
-    hasSalary: true,
-    salaryPaise: Math.round(Number(salary.amount) * 100),
-    salaryTotal: Number(salary.amount),
-    savingsPaise,
-    savingsTotal: savingsPaise / 100,
-    remaining: pool.remaining,
-    remainingPaise: pool.remainingPaise,
-    isNegative: pool.remainingPaise < 0
-  };
-}
-
-function renderFinance() {
-  const key = state.financeMonth;
-  const finance = financeFor(key);
-
-  $('financeMonthLabel').textContent = formatMonthKey(key);
-  $('financeMonthLabel').setAttribute('title', formatMonthKey(key));
-  $('financeSalary').textContent = finance.hasSalary ? formatMoney(finance.salaryTotal) : 'Not set';
-  $('financeSalary').classList.toggle('is-unset', !finance.hasSalary);
-  $('financeExpenses').textContent = formatMoney(finance.expenseTotal);
-  $('financeSavings').textContent = formatMoney(finance.savingsTotal);
-
-  const balance = $('financeBalance');
-  balance.classList.toggle('is-negative', finance.isNegative);
-  balance.classList.toggle('is-unconfigured', !finance.hasSalary);
-
-  if (!finance.hasSalary) {
-    $('financeRemainingValue').textContent = '—';
-    $('financeRemainingNote').textContent = `No salary recorded for ${formatMonthKey(key)}. Add one to see what is left.`;
-    $('financeRemainingValue').setAttribute('aria-label', 'Remaining balance unavailable — no salary recorded');
-  } else {
-    $('financeRemainingValue').textContent = formatMoney(finance.remaining);
-    $('financeRemainingValue').setAttribute('aria-label', `Remaining balance ${formatMoney(finance.remaining)}`);
-    $('financeRemainingNote').textContent = finance.isNegative
-      ? `Expenses and savings are ${formatMoney(Math.abs(finance.remaining))} more than this month’s salary.`
-      : 'Salary minus this month’s expenses and savings.';
-  }
-
-  $('financeCard').setAttribute(
-    'aria-label',
-    finance.hasSalary
-      ? `${formatMonthKey(key)}: salary ${formatMoney(finance.salaryTotal)}, expenses ${formatMoney(finance.expenseTotal)}, savings ${formatMoney(finance.savingsTotal)}, remaining ${formatMoney(finance.remaining)}.`
-      : `${formatMonthKey(key)}: no salary recorded. Expenses ${formatMoney(finance.expenseTotal)}, savings ${formatMoney(finance.savingsTotal)}.`
-  );
-
-  const shortLabel = shortMonthLabel(key, { withYear: true });
-  $('shortcutSalary').textContent = finance.hasSalary
-    ? `${formatMoney(finance.salaryTotal)} recorded`
-    : `Not set for ${shortLabel}`;
-  $('shortcutSavings').textContent = `${formatMoney(finance.savingsTotal)} saved`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1091,12 +1026,6 @@ function selectPeriod(period) {
   const summary = summarize(state.expenses, new Date());
   renderHero(summary);
   renderGlance(summary);
-}
-
-function shiftFinanceMonth(delta) {
-  state.financeMonth = shiftMonth(state.financeMonth, delta);
-  renderFinance();
-  writeRoute('replace');
 }
 
 function shiftSalaryMonth(delta, animate = true) {
@@ -2595,8 +2524,9 @@ function bindEvents() {
     if (button) showView(button.dataset.goto);
   });
 
-  $('financePrevMonth').addEventListener('click', () => shiftFinanceMonth(-1));
-  $('financeNextMonth').addEventListener('click', () => shiftFinanceMonth(1));
+
+  $('openDataSettings').addEventListener('click', () => $('dataSettingsSheet').showModal());
+  $('closeDataSettings').addEventListener('click', () => closeDialog($('dataSettingsSheet')));
 
   $('salaryPrevMonth').addEventListener('click', () => shiftSalaryMonth(-1));
   $('salaryNextMonth').addEventListener('click', () => shiftSalaryMonth(1));
