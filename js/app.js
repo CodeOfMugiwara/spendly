@@ -2519,13 +2519,7 @@ function bindEvents() {
     if (tab) showView(tab.dataset.view);
   });
 
-  document.querySelector('.shortcuts').addEventListener('click', event => {
-    const button = event.target.closest('[data-goto]');
-    if (button) showView(button.dataset.goto);
-  });
-
-
-  $('openDataSettings').addEventListener('click', () => $('dataSettingsSheet').showModal());
+  $('openDataSettings').addEventListener('click', () => openDialog($('dataSettingsSheet')));
   $('closeDataSettings').addEventListener('click', () => closeDialog($('dataSettingsSheet')));
 
   $('salaryPrevMonth').addEventListener('click', () => shiftSalaryMonth(-1));
