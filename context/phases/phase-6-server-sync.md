@@ -143,16 +143,53 @@ In Phase 6.1, `sync_change_feed.cursor` used a PostgreSQL identity column (`bigi
 
 ---
 
-## 7. Verification & Test Summary
-1. **Multi-Session Concurrency Test Suite (`supabase/tests/concurrency_test.mjs`)**:
-   - **Same-User Row Lock Serialization**: Session 1 held a 3.0s lock on User A's row; Session 2 for User A was blocked for ~3s and only committed after Session 1 released the lock.
-   - **Multi-User Parallelism**: Session 3 for User B completed concurrently in 4.76s without blocking on User A.
-   - **Commit-Order Monotonicity**: User A's change feed committed cursors `[1, 2]` in strict sequential commit order with no skipped cursors.
-   - **Composite Operations**: Verified expense (cursor 4) and linked savings withdrawal (cursor 5) received consecutive cursors committed in the same transaction.
-   - **Rollback Safety**: Verified an aborted transaction rolled back the cursor counter, resulting in zero cursor gaps.
-   - **RLS & Privilege Hardening**: Direct `UPDATE` by authenticated users on `sync_user_cursors` is rejected with `permission denied`.
-2. **Database Integration Tests (`supabase/tests/sync_rpc_tests.sql`)**: Passed with exit code 0.
-3. **Hosted Security Tests (`supabase/tests/rls_security.sql`)**: Passed with exit code 0.
-4. **Unit Tests (`npm test`)**: 90/90 passed.
-5. **Production Build (`npm run build`)**: Vite compiled client bundle in 342ms.
-6. **Browser E2E Tests (`npm run test:e2e`)**: 38/38 Playwright scenarios passed.
+## 8. Client Synchronization Engine & End-to-End System (Phases 6.2–6.5)
+
+**Implementation Files:**
+- Client Sync Engine: [`js/sync.js`](file:///d:/Spendly/js/sync.js)
+- Repository Sync Methods: [`js/repository.js`](file:///d:/Spendly/js/repository.js)
+- Core Sync Constants: [`js/core.js`](file:///d:/Spendly/js/core.js)
+- UI Integration: [`js/app.js`](file:///d:/Spendly/js/app.js), [`index.html`](file:///d:/Spendly/index.html), [`css/app.css`](file:///d:/Spendly/css/app.css)
+- Change Feed Migration: [`supabase/migrations/20261109020000_enrich_sync_change_feed_savings_allocations.sql`](file:///d:/Spendly/supabase/migrations/20261109020000_enrich_sync_change_feed_savings_allocations.sql)
+- Sync Unit Tests: [`tests/unit/sync.test.mjs`](file:///d:/Spendly/tests/unit/sync.test.mjs)
+- Browser E2E Tests: [`tests/e2e.mjs`](file:///d:/Spendly/tests/e2e.mjs)
+
+### Architecture & Capabilities
+
+#### 1. Client Synchronization Engine (`SyncEngine`)
+- **Outbox Upload Pipeline**: Reads unacknowledged operations from the account-specific IndexedDB `outbox` store (`spendly_user_${userId}`). Formats `p_operation` payloads and invokes `public.apply_sync_operation(p_operation)`.
+- **Atomic Acknowledgment**: When confirmed by the server (including idempotent replay), updates `status = 'acknowledged'`, records `remoteCursor`, and sets `acknowledgedAt` in the local outbox.
+- **Incremental Change Feed Download**: Queries `public.get_sync_changes(p_after_cursor, p_limit)` starting from `sync:lastSyncedCursor`. Processes paginated batches until `hasMore` is false.
+- **Atomic Local Remote Merge (`FinancialLedgerRepository.applyRemoteChanges`)**: Applies downloaded changes across `expenses`, `salaries`, `savings`, `extraIncome`, `meta`, and `outbox` within a **single IndexedDB transaction**.
+- **Echo-Upload Prevention**: Modifies domain records directly in IndexedDB without creating outbox operations. Advances `sync:lastSyncedCursor` only after changes commit locally.
+- **Conflict Safety**: Checks whether an uncommitted local outbox operation exists on the exact same entity; if present, local uncommitted edits are preserved over incoming remote updates.
+
+#### 2. Network, Retry & Conflict Handling
+- **Online/Offline Transitions**: Listens for window `online`/`offline` events and document `visibilitychange`. When online connectivity returns, triggers automatic synchronization.
+- **Exponential Backoff with Jitter**: Transient network failures and server 5xx errors retry with exponential delays (`min(base * 2^attempts + jitter, maxDelay)`).
+- **Error Classification**:
+  - `AuthRequiredSyncError`: Triggered by code `42501` or expired tokens; pauses retries and prompts user sign-in.
+  - `PermanentSyncError`: Schema or business rule violations (`23514`, `23505`, `23503`, `22023`, `P0001`, `P0002`, HTTP 4xx). Marks outbox record as `blocked` to prevent pipeline stalls and surfaces an error notice in UI.
+  - `RetryableSyncError`: Network drops, timeouts, HTTP 5xx, or HTTP 429.
+- **Account Mutex**: Guarantees only one synchronization run occurs per account at any moment; concurrent triggers are coalesced into a single scheduled follow-up sync.
+
+#### 3. Synchronization Status UI
+- **Header Indicator (`#connection`)**: Minimalist pill reflecting real-time state:
+  - `synced`: "Synced" (forest-green dot)
+  - `syncing`: "Syncing…" (pulsing emerald dot)
+  - `offline`: "Waiting for internet" (slate grey dot)
+  - `pending`: "Pending upload" (slate dot)
+  - `error`: "Sync retry" (amber dot)
+  - `auth_required`: "Sign in to sync" (amber dot)
+  - `blocked`: "Sync issue" (coral red dot)
+- **Data Settings Card (`#syncSettingsCard`)**: Integrated in `#dataSettingsSheet`, showing current status headline, last synced timestamp, manual sync trigger button (`#manualSyncButton`), and blocked operation remediation (`#retryBlockedButton`).
+
+---
+
+## 9. Final Verification Summary (Phases 6.1–6.5)
+- **Unit Tests (`npm test`)**: **110/110 passed** (0 failures across all 7 test files, duration ~2.2s).
+- **Playwright E2E Tests (`npm run test:e2e`)**: **42/42 checks passed** (0 failures, 0 console errors, 0 axe accessibility violations).
+- **Concurrency Integration Tests (`supabase/tests/concurrency_test.mjs`)**: **All 4 tests passed** (serialization, parallelism, composite cursors, rollback safety).
+- **Production Build (`npm run build`)**: 11 modules transformed cleanly in 325ms with 0 warnings.
+- **Diff Check (`git diff --check`)**: Clean, 0 whitespace anomalies.
+- **Git State**: All changes committed locally; 0 remote pushes or deployments.

@@ -321,6 +321,119 @@ svg {
   box-shadow: 0 0 0 3px rgba(192, 122, 18, 0.13);
 }
 
+.connection[role="button"] {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.connection[role="button"]:hover {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(20, 60, 35, 0.18);
+}
+
+.connection[role="button"]:active {
+  transform: scale(0.97);
+}
+
+.connection[data-state="synced"] {
+  color: var(--forest-dark);
+}
+
+.connection[data-state="synced"] .connection__dot {
+  background: var(--forest-bright);
+  box-shadow: 0 0 0 3px rgba(47, 138, 85, 0.15);
+}
+
+.connection[data-state="syncing"] {
+  color: var(--forest-dark);
+  background: rgba(240, 250, 244, 0.9);
+  border-color: rgba(47, 138, 85, 0.22);
+}
+
+.connection[data-state="syncing"] .connection__dot {
+  background: var(--forest-bright);
+  box-shadow: 0 0 0 3px rgba(47, 138, 85, 0.25);
+  animation: pulse-sync-dot 1.2s infinite ease-in-out;
+}
+
+@keyframes pulse-sync-dot {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.6;
+  }
+}
+
+.connection[data-state="pending"] {
+  color: var(--ink-soft);
+  background: rgba(245, 247, 245, 0.95);
+  border-color: rgba(20, 60, 35, 0.15);
+}
+
+.connection[data-state="pending"] .connection__dot {
+  background: #64748b;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.15);
+}
+
+.connection[data-state="error"] {
+  color: #9a4c08;
+  background: rgba(254, 243, 235, 0.95);
+  border-color: rgba(200, 100, 20, 0.25);
+}
+
+.connection[data-state="error"] .connection__dot {
+  background: #d97706;
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.2);
+}
+
+.connection[data-state="auth_required"] {
+  color: #a22020;
+  background: rgba(254, 242, 242, 0.95);
+  border-color: rgba(220, 38, 38, 0.25);
+}
+
+.connection[data-state="auth_required"] .connection__dot {
+  background: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2);
+}
+
+.connection[data-state="blocked"] {
+  color: #991b1b;
+  background: rgba(254, 242, 242, 0.95);
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+.connection[data-state="blocked"] .connection__dot {
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+}
+
+.sync-card__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sync-card__actions .button {
+  flex: 1;
+}
+
+.sync-card__notice {
+  margin: 10px 0 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #991b1b;
+  background: rgba(254, 242, 242, 0.7);
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(220, 38, 38, 0.15);
+}
+
 /* --------------------------------------------------------------------------
    Banners
    -------------------------------------------------------------------------- */

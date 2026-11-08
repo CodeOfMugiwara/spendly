@@ -433,6 +433,7 @@ export class IndexedDBOutboxStore extends IndexedDBCollection {
         record.status = 'acknowledged';
         record.acknowledgedAt = ackMetadata.acknowledgedAt ?? new Date().toISOString();
         if (ackMetadata.remoteId) record.remoteId = ackMetadata.remoteId;
+        if (ackMetadata.remoteCursor != null) record.remoteCursor = ackMetadata.remoteCursor;
         store.put(record);
       };
     });

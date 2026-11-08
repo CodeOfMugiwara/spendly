@@ -18,6 +18,16 @@ export const OUTBOX_STATUS = Object.freeze({
   ACKNOWLEDGED: 'acknowledged',
   BLOCKED: 'blocked'
 });
+export const SYNC_STATUS = Object.freeze({
+  IDLE: 'idle',
+  SYNCING: 'syncing',
+  SYNCED: 'synced',
+  PENDING: 'pending',
+  OFFLINE: 'offline',
+  TEMPORARY_ERROR: 'error',
+  AUTH_REQUIRED: 'auth_required',
+  BLOCKED: 'blocked'
+});
 
 /** Generate a valid RFC 4122 v4 UUID compatible with PostgreSQL. */
 export function generateUUID() {

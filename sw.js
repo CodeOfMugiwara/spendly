@@ -12,7 +12,7 @@
  * The worker never opens IndexedDB. Updating the app cannot touch expenses.
  */
 
-const CACHE_VERSION = 'v27';
+const CACHE_VERSION = 'v28';
 const CACHE_PREFIX = 'spendly-';
 const CACHE_NAME = `${CACHE_PREFIX}shell-${CACHE_VERSION}`;
 
@@ -25,6 +25,7 @@ const APP_SHELL = [
   './js/repository.js',
   './js/supabase.js',
   './js/vendor/supabase.js',
+  './js/sync.js',
   './manifest.json',
   './icons/icon-180.png',
   './icons/icon-192.png',

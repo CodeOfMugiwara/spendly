@@ -422,3 +422,28 @@ Verification: `npm test` passed 60/60. `npm run test:e2e` passed 25/25, includin
 - Proved multi-user parallelism and same-user serialization via a genuine two-session test in `supabase/tests/concurrency_test.mjs`.
 - Verified 90 unit tests, 38 Playwright E2E tests, build, and zero diff check errors.
 - Migration `20261109013000_make_sync_change_cursors_transaction_safe.sql` applied to `spendly-dev`.
+
+## 21. Phase 6 (6.2–6.5) — 9 November 2026 — Client Synchronization Engine, Status UI, Retry Handling & Full Verification
+
+**Scope:** Complete client synchronization engine, retry & conflict policies, minimalist status UI, and full verification suite.
+**Why:** Connect the local-first IndexedDB outbox to the Supabase backend with transactional cursors, robust network handling, explicit conflict resolution, and clear user-facing feedback without regressing financial ledger rules.
+- **Client Synchronization Engine (`js/sync.js`)**:
+  - Implemented `SyncEngine` with outbox upload loop, causal sequence ordering, and server acknowledgment storing `remoteCursor`.
+  - Implemented incremental delta downloads via `public.get_sync_changes` with cursor pagination.
+  - Implemented `applyRemoteChanges` in `FinancialLedgerRepository` applying remote operations atomically to IndexedDB without enqueuing echo-outbox records.
+  - Enriched `get_sync_changes` via migration `20261109020000_enrich_sync_change_feed_savings_allocations.sql` to include `extra_income_allocations`.
+- **Retry, Conflict & Network Handling**:
+  - Online/offline lifecycle listeners with exponential backoff and jitter.
+  - Granular error classification: permanent schema/business errors marked `status: 'blocked'`, authentication failures flagged `auth_required`, and transient errors retried.
+  - Account-scoped concurrency mutex coalescing concurrent sync requests.
+  - Conflict policy preserving uncommitted local edits over remote updates without blind last-write-wins.
+- **Synchronization Status UI**:
+  - Enhanced `#connection` header indicator with states (`synced`, `syncing`, `offline`, `pending`, `error`, `auth_required`, `blocked`).
+  - Added `#syncSettingsCard` inside Data Settings (`#dataSettingsSheet`) showing status headline, last synced time, manual sync trigger, and blocked operation retry.
+- **Full Verification**:
+  - 110/110 unit tests passing (including 17 exhaustive tests in `tests/unit/sync.test.mjs`).
+  - 42/42 Playwright E2E browser checks passing (including 4 new end-to-end sync, download, offline, and conflict remediation scenarios).
+  - 4/4 concurrency integration tests passing against `spendly-dev`.
+  - Vite production build cleanly generating 11 transformed modules in 325ms.
+  - Clean git diff check with zero formatting or whitespace anomalies.
+  - See `context/phases/phase-6-server-sync.md`.

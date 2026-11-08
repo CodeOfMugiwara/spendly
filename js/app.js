@@ -68,6 +68,10 @@ import {
   formatAuthError
 } from './supabase.js';
 import {
+  SyncEngine,
+  SYNC_STATUS
+} from './sync.js';
+import {
   DuplicateMonthError,
   AlreadyReversedError,
   FinancialLedgerRepository,
@@ -117,6 +121,7 @@ let offlineReady = Boolean(navigator.serviceWorker?.controller);
 const state = {
   user: null,
   database: null,
+  syncEngine: null,
   authScreen: 'login',
   pendingVerificationEmail: '',
   repo: null,
@@ -343,15 +348,27 @@ function updateUserUI(user) {
     if (emailLabel) emailLabel.textContent = user.email;
     if (avatar) avatar.textContent = user.email.charAt(0).toUpperCase();
     if (settingsEmail) settingsEmail.textContent = user.email;
+    if ($('syncSettingsCard')) $('syncSettingsCard').hidden = false;
   } else {
     if (chip) chip.hidden = true;
     if (emailLabel) emailLabel.textContent = '';
     if (avatar) avatar.textContent = 'U';
     if (settingsEmail) settingsEmail.textContent = '';
+    if ($('syncSettingsCard')) $('syncSettingsCard').hidden = true;
   }
+  updateSyncUI();
 }
 
 function closeAccountData() {
+  if (state.syncEngine) {
+    try {
+      state.syncEngine.dispose();
+    } catch (err) {
+      console.warn('Error disposing sync engine:', err);
+    }
+    state.syncEngine = null;
+  }
+
   if (state.database) {
     try {
       state.database.close();
@@ -464,6 +481,23 @@ async function handleAuthenticated(user) {
     }
 
     void requestPersistentStorage();
+
+    if (hasSupabaseConfig()) {
+      state.syncEngine = new SyncEngine({
+        supabase: getSupabase(),
+        ledgerRepo: state.ledgerRepo,
+        userId: user.id,
+        onStatusChange: (statusMeta) => {
+          updateSyncUI(statusMeta);
+        },
+        onRemoteChange: async () => {
+          await refreshAll({ skipSync: true });
+          render();
+        }
+      });
+
+      void state.syncEngine.sync();
+    }
   } catch (error) {
     console.error('Spendly could not start account:', error);
     showFatal(error);
@@ -526,7 +560,7 @@ function storageMessage({ persistent, usage, quota }) {
   return `Your data stays in this browser. Download a backup to keep a separate copy.${usageText}`;
 }
 
-async function refreshAll() {
+async function refreshAll(options = {}) {
   if (!state.repo) return;
   const [expenses, salaries, savings, extraIncome] = await Promise.all([
     state.repo.list(),
@@ -538,6 +572,10 @@ async function refreshAll() {
   state.salaries = salaries;
   state.savings = savings;
   state.extraIncome = extraIncome;
+
+  if (!options?.skipSync && state.syncEngine) {
+    void state.syncEngine.sync();
+  }
 }
 
 function hasAnyData() {
@@ -2570,15 +2608,144 @@ function setupDialogs() {
 /* -------------------------------------------------------------------------- */
 
 function updateConnectionUI() {
-  const online = navigator.onLine;
-  $('connection').dataset.state = online ? 'online' : 'offline';
-  $('connectionText').textContent = online
-    ? (offlineReady ? 'Available offline' : 'On this device')
-    : 'Offline';
-  $('connection').title = online
-    ? 'Saved on this device — available offline after the first visit'
-    : 'Offline — your data is saved on this device';
+  const online = typeof navigator !== 'undefined' && navigator.onLine !== false;
   $('offlineBanner').hidden = online;
+
+  if (!state.user) {
+    $('connection').dataset.state = online ? 'online' : 'offline';
+    $('connectionText').textContent = online
+      ? (offlineReady ? 'Available offline' : 'On this device')
+      : 'Offline';
+    $('connection').title = online
+      ? 'Saved on this device — available offline after the first visit'
+      : 'Offline — your data is saved on this device';
+    $('connection').removeAttribute('role');
+    $('connection').removeAttribute('tabindex');
+    return;
+  }
+
+  updateSyncUI(state.syncEngine?.statusMeta || {});
+}
+
+function updateSyncUI(meta = {}) {
+  const connection = $('connection');
+  const connectionText = $('connectionText');
+  const syncSettingsCard = $('syncSettingsCard');
+  const syncHeadline = $('syncStatusHeadline');
+  const syncLastTime = $('syncLastTimeLabel');
+  const syncNotice = $('syncNoticeMessage');
+  const retryBlockedButton = $('retryBlockedButton');
+  const manualSyncButton = $('manualSyncButton');
+
+  if (!state.user) {
+    if (syncSettingsCard) syncSettingsCard.hidden = true;
+    if (connection) {
+      connection.dataset.state = (typeof navigator !== 'undefined' && navigator.onLine === false) ? 'offline' : 'online';
+      connection.title = 'Where your data is saved';
+      connection.removeAttribute('role');
+      connection.removeAttribute('tabindex');
+    }
+    if (connectionText) connectionText.textContent = 'On this device';
+    if (syncHeadline) syncHeadline.textContent = 'Not signed in';
+    if (syncLastTime) syncLastTime.textContent = 'Sign in to sync with cloud';
+    if (syncNotice) syncNotice.hidden = true;
+    if (retryBlockedButton) retryBlockedButton.hidden = true;
+    return;
+  }
+
+  if (syncSettingsCard) syncSettingsCard.hidden = false;
+
+  const status = meta.status || state.syncEngine?.status || SYNC_STATUS.IDLE;
+  if (connection) {
+    connection.dataset.state = status;
+    connection.setAttribute('role', 'button');
+    connection.setAttribute('tabindex', '0');
+  }
+
+  const formatLastSync = (iso) => {
+    if (!iso) return 'Never synced';
+    const date = new Date(iso);
+    const now = new Date();
+    const diffSec = Math.floor((now - date) / 1000);
+    if (diffSec < 15) return 'Just now';
+    if (diffSec < 60) return `${diffSec}s ago`;
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const lastSyncStr = formatLastSync(meta.lastSyncAt || state.syncEngine?.statusMeta?.lastSyncAt);
+
+  switch (status) {
+    case SYNC_STATUS.SYNCING:
+      if (connectionText) connectionText.textContent = 'Syncing…';
+      if (connection) connection.title = 'Syncing changes with cloud';
+      if (syncHeadline) syncHeadline.textContent = 'Syncing…';
+      if (syncLastTime) syncLastTime.textContent = 'Uploading & downloading changes';
+      if (manualSyncButton) manualSyncButton.disabled = true;
+      break;
+
+    case SYNC_STATUS.OFFLINE:
+      if (connectionText) connectionText.textContent = 'Waiting for internet';
+      if (connection) connection.title = 'Offline — changes saved locally';
+      if (syncHeadline) syncHeadline.textContent = 'Waiting for internet';
+      if (syncLastTime) syncLastTime.textContent = `Offline · Last synced: ${lastSyncStr}`;
+      if (manualSyncButton) manualSyncButton.disabled = false;
+      break;
+
+    case SYNC_STATUS.PENDING: {
+      const count = meta.pendingCount ?? 1;
+      const label = `${count} pending`;
+      if (connectionText) connectionText.textContent = label;
+      if (connection) connection.title = `${count} change${count === 1 ? '' : 's'} waiting to sync`;
+      if (syncHeadline) syncHeadline.textContent = `${count} change${count === 1 ? '' : 's'} pending`;
+      if (syncLastTime) syncLastTime.textContent = `Last synced: ${lastSyncStr}`;
+      if (manualSyncButton) manualSyncButton.disabled = false;
+      break;
+    }
+
+    case SYNC_STATUS.TEMPORARY_ERROR:
+      if (connectionText) connectionText.textContent = 'Sync retry';
+      if (connection) connection.title = 'Temporary connection error — will retry automatically';
+      if (syncHeadline) syncHeadline.textContent = 'Connection issue';
+      if (syncLastTime) syncLastTime.textContent = `Retrying · Last synced: ${lastSyncStr}`;
+      if (manualSyncButton) manualSyncButton.disabled = false;
+      break;
+
+    case SYNC_STATUS.AUTH_REQUIRED:
+      if (connectionText) connectionText.textContent = 'Sign in to sync';
+      if (connection) connection.title = 'Authentication expired. Sign in to resume sync.';
+      if (syncHeadline) syncHeadline.textContent = 'Sign in required';
+      if (syncLastTime) syncLastTime.textContent = 'Session expired — data saved safely locally';
+      if (manualSyncButton) manualSyncButton.disabled = false;
+      break;
+
+    case SYNC_STATUS.BLOCKED: {
+      const count = meta.blockedCount || 1;
+      if (connectionText) connectionText.textContent = 'Sync issue';
+      if (connection) connection.title = `${count} change${count === 1 ? '' : 's'} could not be synced. Tap to review.`;
+      if (syncHeadline) syncHeadline.textContent = 'Sync attention needed';
+      if (syncLastTime) syncLastTime.textContent = `${count} change${count === 1 ? '' : 's'} blocked by server rules`;
+      if (syncNotice) {
+        syncNotice.hidden = false;
+        syncNotice.textContent = meta.error || 'A change could not be synced due to a server constraint.';
+      }
+      if (retryBlockedButton) retryBlockedButton.hidden = false;
+      if (manualSyncButton) manualSyncButton.disabled = false;
+      return;
+    }
+
+    case SYNC_STATUS.SYNCED:
+    default:
+      if (connectionText) connectionText.textContent = 'Synced';
+      if (connection) connection.title = `Synced with cloud · ${lastSyncStr}`;
+      if (syncHeadline) syncHeadline.textContent = 'Synced';
+      if (syncLastTime) syncLastTime.textContent = `Last synced: ${lastSyncStr}`;
+      if (manualSyncButton) manualSyncButton.disabled = false;
+      break;
+  }
+
+  if (syncNotice) syncNotice.hidden = true;
+  if (retryBlockedButton) retryBlockedButton.hidden = true;
 }
 
 function markOfflineReady() {
@@ -2978,6 +3145,29 @@ function bindEvents() {
     }
   });
   $('restoreBackup').addEventListener('click', () => $('fileInput').click());
+  $('manualSyncButton')?.addEventListener('click', async () => {
+    if (state.syncEngine) {
+      const res = await state.syncEngine.triggerSync();
+      if (res?.ok) {
+        showToast('Synchronized with cloud.', { tone: 'success' });
+      }
+    }
+  });
+  $('retryBlockedButton')?.addEventListener('click', async () => {
+    if (state.syncEngine) {
+      await state.syncEngine.retryBlockedOperations();
+      showToast('Retrying synchronization.', { tone: 'success' });
+    }
+  });
+  $('connection')?.addEventListener('click', () => {
+    if (state.user && state.syncEngine) {
+      if (state.syncEngine.status === SYNC_STATUS.BLOCKED || state.syncEngine.status === SYNC_STATUS.TEMPORARY_ERROR) {
+        openDialog($('dataSettingsSheet'));
+      } else {
+        void state.syncEngine.triggerSync();
+      }
+    }
+  });
   $('eraseAllData').addEventListener('click', confirmEraseAllData);
   $('fileInput').addEventListener('change', event => {
     void handleRestoreFile(event.target.files?.[0]);

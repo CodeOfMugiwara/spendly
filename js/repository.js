@@ -10,6 +10,7 @@ import {
   STORAGE_KEY,
   OUTBOX_STORE,
   OUTBOX_STATUS,
+  SYNC_STATUS,
   generateUUID,
   isValidUUID,
   computeSalaryPool,
@@ -1678,7 +1679,8 @@ export class FinancialLedgerRepository {
         ...record,
         status: OUTBOX_STATUS.ACKNOWLEDGED,
         acknowledgedAt: ackMetadata.acknowledgedAt ?? this.now().toISOString(),
-        ...(ackMetadata.remoteId ? { remoteId: ackMetadata.remoteId } : {})
+        ...(ackMetadata.remoteId ? { remoteId: ackMetadata.remoteId } : {}),
+        ...(ackMetadata.remoteCursor != null ? { remoteCursor: ackMetadata.remoteCursor } : {})
       };
       collections.outbox.put(updated);
       return updated;
@@ -1723,5 +1725,237 @@ export class FinancialLedgerRepository {
       }
       return updates;
     });
+  }
+
+  /**
+   * Atomically apply remote changes from Supabase sync_change_feed into local IndexedDB
+   * and advance the sync cursor. Never enqueues new outbox operations.
+   */
+  applyRemoteChanges(changes = [], newCursor = null) {
+    if (!changes.length && newCursor == null) return Promise.resolve(0);
+
+    const stores = ['expenses', 'salaries', 'savings', 'extraIncome', 'meta'];
+    if (this.db.objectStoreNames.contains('outbox')) stores.push('outbox');
+
+    return this.#transaction(stores, 'readwrite', ({ collections, snapshots }) => {
+      let appliedCount = 0;
+
+      for (const change of changes) {
+        if (!change || !change.entityType) continue;
+
+        // 1. If this operation originated from this device's outbox, acknowledge it
+        const localOutboxOp = snapshots.outbox?.find(op => op.operationId === change.operationId);
+        if (localOutboxOp) {
+          if (localOutboxOp.status === OUTBOX_STATUS.PENDING) {
+            localOutboxOp.status = OUTBOX_STATUS.ACKNOWLEDGED;
+            localOutboxOp.acknowledgedAt = this.now().toISOString();
+            if (change.cursor) localOutboxOp.remoteCursor = change.cursor;
+            collections.outbox?.put(localOutboxOp);
+          }
+          continue;
+        }
+
+        // 2. Conflict check: if local has a pending outbox edit on the exact same entity,
+        // do not overwrite uncommitted local edits with remote data.
+        const hasPendingLocalEdit = snapshots.outbox?.some(
+          op => op.status === OUTBOX_STATUS.PENDING && op.entityId === change.entityId
+        );
+        if (hasPendingLocalEdit) {
+          continue;
+        }
+
+        const record = change.record;
+        if (!record && change.action !== 'delete') continue;
+
+        switch (change.entityType) {
+          case 'salary': {
+            if (change.action === 'delete' || record?.deleted_at) {
+              collections.salaries.delete(change.entityId);
+              const idx = snapshots.salaries.findIndex(s => s.id === change.entityId);
+              if (idx !== -1) snapshots.salaries.splice(idx, 1);
+            } else {
+              const localSalary = {
+                id: record.id,
+                monthKey: record.month_key,
+                amount: Number(record.amount),
+                amountPaise: Number(record.amount_paise) || Math.round(Number(record.amount) * 100),
+                notes: record.notes || '',
+                createdAt: record.created_at,
+                updatedAt: record.updated_at
+              };
+              collections.salaries.put(localSalary);
+              const idx = snapshots.salaries.findIndex(s => s.id === localSalary.id);
+              if (idx !== -1) snapshots.salaries[idx] = localSalary;
+              else snapshots.salaries.push(localSalary);
+            }
+            appliedCount++;
+            break;
+          }
+
+          case 'expense': {
+            if (change.action === 'delete' || record?.deleted_at) {
+              collections.expenses.delete(change.entityId);
+              const idx = snapshots.expenses.findIndex(e => e.id === change.entityId);
+              if (idx !== -1) snapshots.expenses.splice(idx, 1);
+            } else {
+              const localExpense = {
+                id: record.id,
+                amount: Number(record.amount),
+                amountPaise: Number(record.amount_paise) || Math.round(Number(record.amount) * 100),
+                description: record.description || '',
+                date: record.transaction_date,
+                paymentSource: record.payment_source,
+                salaryRecordId: record.salary_record_id || null,
+                ...(record.allocation_status ? { allocationStatus: record.allocation_status } : {}),
+                createdAt: record.created_at,
+                updatedAt: record.updated_at
+              };
+              collections.expenses.put(localExpense);
+              const idx = snapshots.expenses.findIndex(e => e.id === localExpense.id);
+              if (idx !== -1) snapshots.expenses[idx] = localExpense;
+              else snapshots.expenses.push(localExpense);
+            }
+            appliedCount++;
+            break;
+          }
+
+          case 'extra_income': {
+            if (change.action === 'delete' || record?.deleted_at) {
+              collections.extraIncome.delete(change.entityId);
+              const idx = snapshots.extraIncome.findIndex(i => i.id === change.entityId);
+              if (idx !== -1) snapshots.extraIncome.splice(idx, 1);
+            } else {
+              const localIncome = {
+                id: record.id,
+                salaryRecordId: record.salary_record_id || null,
+                amount: Number(record.amount),
+                amountPaise: Number(record.amount_paise) || Math.round(Number(record.amount) * 100),
+                date: record.received_date,
+                monthKey: record.month_key || record.received_date?.slice(0, 7),
+                source: record.source,
+                description: record.description || '',
+                ...(record.allocation_status ? { allocationStatus: record.allocation_status } : {}),
+                reversedAt: record.reversed_at || null,
+                reversalId: record.reversal_id || null,
+                createdAt: record.created_at,
+                updatedAt: record.updated_at
+              };
+              collections.extraIncome.put(localIncome);
+              const idx = snapshots.extraIncome.findIndex(i => i.id === localIncome.id);
+              if (idx !== -1) snapshots.extraIncome[idx] = localIncome;
+              else snapshots.extraIncome.push(localIncome);
+            }
+            appliedCount++;
+            break;
+          }
+
+          case 'saving': {
+            if (change.action === 'delete' || record?.deleted_at) {
+              collections.savings.delete(change.entityId);
+              const idx = snapshots.savings.findIndex(s => s.id === change.entityId);
+              if (idx !== -1) snapshots.savings.splice(idx, 1);
+            } else {
+              const rawAlloc = record.extra_income_allocations ?? record.extraIncomeAllocations;
+              const extraIncomeAllocations = Array.isArray(rawAlloc)
+                ? rawAlloc.map(a => ({
+                    extraIncomeRecordId: a.extraIncomeRecordId || a.extra_income_id,
+                    amountPaise: Number(a.amountPaise || a.amount_paise)
+                  }))
+                : [];
+
+              const localSaving = {
+                id: record.id,
+                amount: Number(record.amount),
+                amountPaise: Number(record.amount_paise) || Math.round(Number(record.amount) * 100),
+                date: record.transaction_date,
+                monthKey: record.month_key || record.transaction_date?.slice(0, 7),
+                description: record.description || '',
+                type: record.transaction_type,
+                ...(record.source_type ? { source: record.source_type } : {}),
+                salaryRecordId: record.salary_record_id || null,
+                expenseId: record.expense_id || null,
+                salaryAllocationPaise: record.salary_allocation_paise != null ? Number(record.salary_allocation_paise) : null,
+                extraIncomeAllocations,
+                ...(record.allocation_status ? { allocationStatus: record.allocation_status } : {}),
+                reversedAt: record.reversed_at || null,
+                reversalId: record.reversal_id || null,
+                createdAt: record.created_at,
+                updatedAt: record.updated_at
+              };
+              collections.savings.put(localSaving);
+              const idx = snapshots.savings.findIndex(s => s.id === localSaving.id);
+              if (idx !== -1) snapshots.savings[idx] = localSaving;
+              else snapshots.savings.push(localSaving);
+            }
+            appliedCount++;
+            break;
+          }
+
+          default:
+            break;
+        }
+      }
+
+      // Persist the new synchronization cursor atomically
+      if (newCursor != null && collections.meta) {
+        collections.meta.put({ key: 'sync:lastSyncedCursor', value: Number(newCursor) });
+        const metaItem = snapshots.meta?.find(r => r.key === 'sync:lastSyncedCursor');
+        if (metaItem) metaItem.value = Number(newCursor);
+        else snapshots.meta?.push({ key: 'sync:lastSyncedCursor', value: Number(newCursor) });
+      }
+
+      return appliedCount;
+    });
+  }
+
+  getLastSyncedCursor() {
+    if (!this.db.objectStoreNames.contains('meta')) return Promise.resolve(0);
+    return this.#transaction(['meta'], 'readonly', ({ snapshots }) => {
+      const item = snapshots.meta?.find(r => r.key === 'sync:lastSyncedCursor');
+      return item ? Number(item.value) : 0;
+    });
+  }
+
+  resetBlockedOperations() {
+    if (!this.db.objectStoreNames.contains('outbox')) return Promise.resolve(0);
+    return this.#transaction(['outbox'], 'readwrite', ({ collections, snapshots }) => {
+      let resetCount = 0;
+      for (const op of snapshots.outbox || []) {
+        if (op.status === OUTBOX_STATUS.BLOCKED) {
+          op.status = OUTBOX_STATUS.PENDING;
+          op.lastError = null;
+          collections.outbox.put(op);
+          resetCount++;
+        }
+      }
+      return resetCount;
+    });
+  }
+
+  countBlockedOperations() {
+    if (!this.db.objectStoreNames.contains('outbox')) return Promise.resolve(0);
+    return this.#transaction(['outbox'], 'readonly', ({ snapshots }) => {
+      return (snapshots.outbox || []).filter(op => op.status === OUTBOX_STATUS.BLOCKED).length;
+    });
+  }
+
+  listSalaries() {
+    if (!this.db.objectStoreNames.contains('salaries')) return Promise.resolve([]);
+    return this.#transaction(['salaries'], 'readonly', ({ snapshots }) => snapshots.salaries || []);
+  }
+
+  listExpenses() {
+    if (!this.db.objectStoreNames.contains('expenses')) return Promise.resolve([]);
+    return this.#transaction(['expenses'], 'readonly', ({ snapshots }) => snapshots.expenses || []);
+  }
+
+  listSavings() {
+    if (!this.db.objectStoreNames.contains('savings')) return Promise.resolve([]);
+    return this.#transaction(['savings'], 'readonly', ({ snapshots }) => snapshots.savings || []);
+  }
+
+  listExtraIncome() {
+    if (!this.db.objectStoreNames.contains('extraIncome')) return Promise.resolve([]);
+    return this.#transaction(['extraIncome'], 'readonly', ({ snapshots }) => snapshots.extraIncome || []);
   }
 }

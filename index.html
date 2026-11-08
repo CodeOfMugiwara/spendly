@@ -1087,14 +1087,27 @@
               <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
             </button>
             <div class="account-card" id="accountSettingsCard">
-            <div class="account-card__info">
-              <span class="account-card__label">Signed in account</span>
-              <strong class="account-card__email" id="settingsUserEmail"></strong>
+              <div class="account-card__info">
+                <span class="account-card__label">Signed in account</span>
+                <strong class="account-card__email" id="settingsUserEmail"></strong>
+              </div>
+              <button class="button button--quiet button--block" type="button" id="settingsSignOutButton">
+                Sign out
+              </button>
             </div>
-            <button class="button button--quiet button--block" type="button" id="settingsSignOutButton">
-              Sign out
-            </button>
-          </div>
+
+            <div class="account-card" id="syncSettingsCard">
+              <div class="account-card__info">
+                <span class="account-card__label">Cloud synchronization</span>
+                <strong class="account-card__email" id="syncStatusHeadline">Synced</strong>
+                <span class="account-card__sub" id="syncLastTimeLabel">Checking sync status…</span>
+              </div>
+              <div class="sync-card__actions">
+                <button class="button button--quiet" type="button" id="manualSyncButton">Sync now</button>
+                <button class="button button--quiet button--danger" type="button" id="retryBlockedButton" hidden>Retry failed</button>
+              </div>
+              <p class="sync-card__notice" id="syncNoticeMessage" role="status" hidden></p>
+            </div>
 
           <button class="data__action data__action--danger" type="button" id="eraseAllData">
               <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-trash"></use></svg></span>

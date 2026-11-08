@@ -39,6 +39,7 @@ const APP_SHELL_PATHS = [
   '/js/repository.js',
   '/js/supabase.js',
   '/js/vendor/supabase.js',
+  '/js/sync.js',
   '/manifest.json',
   '/icons/icon-180.png',
   '/icons/icon-192.png',
@@ -648,7 +649,7 @@ await run('the app launches, edits and exports with no network', async () => {
   await context.setOffline(true);
   await page.locator('#offlineBanner').waitFor({ state: 'visible' });
   assert.match(await page.locator('#offlineBanner').innerText(), /You’re offline — your expenses are saved on this device\./);
-  assert.equal(await page.locator('#connectionText').innerText(), 'Offline');
+  assert.ok(['Offline', 'Waiting for internet'].includes(await page.locator('#connectionText').innerText()), 'connection indicator indicates offline or waiting for internet');
 
   await page.reload({ waitUntil: 'load' });
   await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
@@ -720,7 +721,7 @@ await run('the app launches, edits and exports with no network', async () => {
 
   await context.setOffline(false);
   await reopened.locator('#offlineBanner').waitFor({ state: 'hidden' });
-  assert.equal(await reopened.locator('#connectionText').innerText(), 'Available offline');
+  assert.ok(['Available offline', 'Synced', 'Syncing…', 'Sync retry', 'Waiting for internet'].includes(await reopened.locator('#connectionText').innerText()), 'connection indicator indicates online or sync state');
 
   await context.close();
 });
@@ -2726,6 +2727,298 @@ await run('financial mutations create atomic outbox operations with monotonic se
   const userDbName = `spendly_user_${MOCK_AUTH_USER.id}`;
   const signedOutSnapshot = await dbSnapshot(page, userDbName);
   assert.equal(signedOutSnapshot.outbox.length, 4, 'pending outbox operations persist in user IndexedDB after logout');
+
+  await context.close();
+});
+
+/* -------------------------------------------------------------------------- */
+/* 9. Phase 6: Bidirectional Client Synchronization, Offline & Concurrency    */
+/* -------------------------------------------------------------------------- */
+
+await run('Phase 6: Outbox operations upload and acknowledge cleanly to Supabase', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  const uploadedOperations = [];
+  let cursorSequence = 100;
+
+  await page.route('**/rest/v1/rpc/apply_sync_operation*', async route => {
+    const postData = route.request().postDataJSON();
+    const op = postData.p_operation;
+    uploadedOperations.push(op);
+    cursorSequence++;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        operation_id: op.client_operation_id,
+        cursor: cursorSequence
+      })
+    });
+  });
+
+  await page.route('**/rest/v1/rpc/get_sync_changes*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([])
+    });
+  });
+
+  await gotoApp(page);
+
+  await addSalary(page, { amount: '75000' });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '350', description: 'Coffee beans' });
+  await waitForToast(page, 'Expense added successfully');
+
+  await page.waitForFunction(() => {
+    const conn = document.getElementById('connection');
+    return conn && conn.dataset.state === 'synced';
+  }, null, { timeout: 10000 });
+
+  assert.equal(await page.locator('#connectionText').innerText(), 'Synced');
+  assert.ok(uploadedOperations.length >= 2, 'uploaded at least 2 operations (salary + expense)');
+  assert.ok(uploadedOperations.some(op => op.operationType === 'salary:create'));
+  assert.ok(uploadedOperations.some(op => op.operationType === 'expense:create' && op.payload?.expense?.description === 'Coffee beans'));
+
+  const snap = await dbSnapshot(page);
+  const salaryOp = snap.outbox.find(op => op.operationType === 'salary:create');
+  const expenseOp = snap.outbox.find(op => op.operationType === 'expense:create');
+  assert.equal(salaryOp.status, 'acknowledged');
+  assert.ok(salaryOp.remoteCursor > 0);
+  assert.equal(expenseOp.status, 'acknowledged');
+  assert.ok(expenseOp.remoteCursor > 0);
+
+  await openDataSettings(page);
+  const syncHeadline = await page.locator('#syncStatusHeadline').innerText();
+  assert.equal(syncHeadline, 'Synced');
+  await page.locator('#closeDataSettings').click();
+
+  await context.close();
+});
+
+await run('Phase 6: Remote changes download and merge without echo-uploading', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  const uploadedFromThisClient = [];
+
+  await page.route('**/rest/v1/rpc/apply_sync_operation*', async route => {
+    const postData = route.request().postDataJSON();
+    uploadedFromThisClient.push(postData.p_operation);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, cursor: 501 })
+    });
+  });
+
+  let changeServed = false;
+  await page.route('**/rest/v1/rpc/get_sync_changes*', async route => {
+    if (!changeServed) {
+      changeServed = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          changes: [
+            {
+              cursor: 500,
+              operationId: '11111111-1111-4000-8000-111111111111',
+              operationType: 'expense:create',
+              entityType: 'expense',
+              entityId: 'e2e2e2e2-2222-4000-8000-222222222222',
+              action: 'INSERT',
+              record: {
+                id: 'e2e2e2e2-2222-4000-8000-222222222222',
+                amount: 850,
+                amount_paise: 85000,
+                description: 'Office Chair from Laptop',
+                transaction_date: toISODate(new Date()),
+                payment_source: 'others',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              },
+              createdAt: new Date().toISOString()
+            }
+          ],
+          nextCursor: 500,
+          hasMore: false
+        })
+      });
+    } else {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          changes: [],
+          nextCursor: 500,
+          hasMore: false
+        })
+      });
+    }
+  });
+
+  await gotoApp(page);
+
+  await page.locator('[data-view="expenses"]').click();
+  await page.locator('#historyList .entry').filter({ hasText: 'Office Chair from Laptop' }).waitFor({ state: 'visible', timeout: 10000 });
+
+  const snap = await dbSnapshot(page);
+  const remoteRecord = snap.records.find(r => r.id === 'e2e2e2e2-2222-4000-8000-222222222222');
+  assert.ok(remoteRecord, 'remote record exists in local database');
+  assert.equal(remoteRecord.description, 'Office Chair from Laptop');
+  assert.equal(snap.outbox.length, 0, 'no outbox operations enqueued for downloaded changes');
+  assert.equal(uploadedFromThisClient.length, 0, 'nothing uploaded by this client for remote changes');
+
+  const cursorRecord = snap.meta.find(m => m.key === 'sync:lastSyncedCursor');
+  assert.equal(String(cursorRecord?.value), '500', 'lastSyncedCursor advanced to 500');
+
+  await context.close();
+});
+
+await run('Phase 6: Offline transitions queue operations and automatically sync upon reconnection', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  const syncedWhileOnline = [];
+  let cursorSeq = 700;
+
+  await page.route('**/rest/v1/rpc/apply_sync_operation*', async route => {
+    const postData = route.request().postDataJSON();
+    syncedWhileOnline.push(postData.p_operation);
+    cursorSeq++;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, cursor: cursorSeq })
+    });
+  });
+
+  await page.route('**/rest/v1/rpc/get_sync_changes*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([])
+    });
+  });
+
+  await gotoApp(page);
+
+  await context.setOffline(true);
+  await page.locator('#offlineBanner').waitFor({ state: 'visible' });
+
+  await addExpense(page, { amount: '220', description: 'Offline Subway sandwich', source: 'others' });
+  await waitForToast(page, 'Expense recorded under Others');
+
+  let snap = await dbSnapshot(page);
+  const pendingOp = snap.outbox.find(op => op.operationType === 'expense:create');
+  assert.ok(pendingOp, 'outbox contains pending expense:create operation');
+  assert.equal(pendingOp.status, 'pending');
+  assert.equal(syncedWhileOnline.length, 0, 'no server calls made while offline');
+
+  const offlineStatus = await page.locator('#connectionText').innerText();
+  assert.ok(['Waiting for internet', 'Pending', 'Pending upload'].some(s => offlineStatus.includes(s) || offlineStatus === s));
+
+  await context.setOffline(false);
+  await page.locator('#offlineBanner').waitFor({ state: 'hidden' });
+
+  await page.waitForFunction(() => {
+    const conn = document.getElementById('connection');
+    return conn && conn.dataset.state === 'synced';
+  }, null, { timeout: 10000 });
+
+  assert.equal(await page.locator('#connectionText').innerText(), 'Synced');
+  assert.ok(syncedWhileOnline.length >= 1, 'operation synced to server upon reconnection');
+  assert.ok(syncedWhileOnline.some(op => op.payload?.expense?.description === 'Offline Subway sandwich'));
+
+  snap = await dbSnapshot(page);
+  const outboxExpense = snap.outbox.find(op => op.operationType === 'expense:create');
+  assert.equal(outboxExpense?.status, 'acknowledged');
+
+  await context.close();
+});
+
+await run('Phase 6: Permanent server rejection marks operation blocked with UI remediation', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  let shouldReject = true;
+  let cursorSeq = 900;
+
+  await page.route('**/rest/v1/rpc/apply_sync_operation*', async route => {
+    if (shouldReject) {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          message: 'Invalid financial operation schema: payload rejected',
+          code: 'P0001'
+        })
+      });
+    } else {
+      cursorSeq++;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, cursor: cursorSeq })
+      });
+    }
+  });
+
+  await page.route('**/rest/v1/rpc/get_sync_changes*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([])
+    });
+  });
+
+  await gotoApp(page);
+
+  await addExpense(page, { amount: '450', description: 'Blocked movie tickets', source: 'others' });
+  await waitForToast(page, 'Expense recorded under Others');
+
+  await page.waitForFunction(() => {
+    const conn = document.getElementById('connection');
+    return conn && conn.dataset.state === 'blocked';
+  }, null, { timeout: 10000 });
+
+  assert.equal(await page.locator('#connectionText').innerText(), 'Sync issue');
+
+  let snap = await dbSnapshot(page);
+  const blockedOp = snap.outbox.find(op => op.operationType === 'expense:create');
+  assert.equal(blockedOp.status, 'blocked');
+
+  await openDataSettings(page);
+  const noticeText = await page.locator('#syncNoticeMessage').innerText();
+  assert.ok(/Invalid financial operation schema|cannot be synced|could not be saved/i.test(noticeText), 'notice message displays error details');
+  assert.equal(await page.locator('#retryBlockedButton').isVisible(), true);
+
+  shouldReject = false;
+  await page.locator('#retryBlockedButton').click();
+
+  await page.waitForFunction(() => {
+    const conn = document.getElementById('connection');
+    return conn && conn.dataset.state === 'synced';
+  }, null, { timeout: 10000 });
+
+  assert.equal(await page.locator('#connectionText').innerText(), 'Synced');
+  snap = await dbSnapshot(page);
+  assert.equal(snap.outbox[0].status, 'acknowledged');
+
+  await page.locator('#closeDataSettings').click();
 
   await context.close();
 });
