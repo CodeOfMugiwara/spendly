@@ -73,14 +73,31 @@ function ensureExtraIncomeStore(db, transaction) {
   if (store && !store.indexNames.contains('by_salaryRecordId')) store.createIndex('by_salaryRecordId', 'salaryRecordId', { unique: false });
 }
 
-/** Open (and if needed create or upgrade) the Spendly database. */
-export function openExpenseDB(factory = globalThis.indexedDB) {
+/** Return the isolated database name for a user account, or the default unowned name. */
+export function getSpendlyDBName(userId = null) {
+  if (!userId) return DB_NAME;
+  const cleanId = String(userId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `spendly_user_${cleanId}`;
+}
+
+/** Open (and if needed create or upgrade) the Spendly database. Accepts database name and factory. */
+export function openExpenseDB(nameOrFactory = DB_NAME, maybeFactory = globalThis.indexedDB) {
+  let dbName = DB_NAME;
+  let factory = globalThis.indexedDB;
+
+  if (typeof nameOrFactory === 'string') {
+    dbName = nameOrFactory;
+    if (maybeFactory) factory = maybeFactory;
+  } else if (nameOrFactory && typeof nameOrFactory === 'object') {
+    factory = nameOrFactory;
+  }
+
   if (!factory) return Promise.reject(new Error('IndexedDB is not available in this browser.'));
 
   return new Promise((resolve, reject) => {
     let request;
     try {
-      request = factory.open(DB_NAME, DB_VERSION);
+      request = factory.open(dbName, DB_VERSION);
     } catch (error) {
       reject(error);
       return;

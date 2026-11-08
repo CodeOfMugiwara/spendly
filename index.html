@@ -131,6 +131,15 @@
       <path d="M4 16.4 9.6 10.8l3.4 3.4L20 7.2"/>
       <path d="M15.2 7.2H20v4.8"/>
     </symbol>
+    <symbol id="i-user" viewBox="0 0 24 24">
+      <circle cx="12" cy="8" r="4"/>
+      <path d="M5 20c0-3.5 3.1-6 7-6s7 2.5 7 6"/>
+    </symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+      <polyline points="16 17 21 12 16 7"/>
+      <line x1="21" y1="12" x2="9" y2="12"/>
+    </symbol>
   </svg>
 
   <div class="app">
@@ -142,6 +151,13 @@
             <span class="brand__name">Spendly<span class="brand__dot">.</span></span>
             <span class="brand__tag">Salary, spending &amp; savings</span>
           </span>
+        </div>
+        <div class="user-chip" id="userChip" hidden>
+          <span class="user-chip__avatar" id="userAvatar" aria-hidden="true">U</span>
+          <span class="user-chip__email" id="userEmailLabel"></span>
+          <button class="user-chip__button" type="button" id="headerSignOutButton" title="Sign out" aria-label="Sign out">
+            <svg class="icon" aria-hidden="true"><use href="#i-logout"></use></svg>
+          </button>
         </div>
         <div class="connection" id="connection" data-state="online" title="Where your data is saved">
           <span class="connection__dot" aria-hidden="true"></span>
@@ -171,6 +187,209 @@
       <!-- ================================================================== -->
       <!-- Dashboard                                                          -->
       <!-- ================================================================== -->
+      <!-- ================================================================== -->
+      <!-- Authentication                                                     -->
+      <!-- ================================================================== -->
+      <section class="auth-view" id="authView" aria-labelledby="authTitle" hidden>
+        <!-- Login Card -->
+        <div class="auth-card" id="authLoginCard">
+          <div class="auth-card__head">
+            <div class="auth-card__badge" aria-hidden="true">
+              <svg class="icon"><use href="#i-lock"></use></svg>
+            </div>
+            <h1 class="auth-card__title" id="authTitle" tabindex="-1">Sign in to Spendly</h1>
+            <p class="auth-card__sub">Access your private expenses and salary tracker.</p>
+          </div>
+
+          <form id="loginForm" class="auth-form" novalidate>
+            <p class="form-error" id="loginError" role="alert" hidden></p>
+
+            <div class="field">
+              <label for="loginEmail">Email address</label>
+              <input id="loginEmail" name="email" type="email" autocomplete="email" required placeholder="you@example.com" aria-describedby="loginEmailError">
+              <p class="field__error" id="loginEmailError" hidden></p>
+            </div>
+
+            <div class="field">
+              <div class="field__label-row">
+                <label for="loginPassword">Password</label>
+                <button type="button" class="text-button text-button--small toggle-password" data-target="loginPassword" aria-label="Show password">Show</button>
+              </div>
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" required placeholder="••••••••" aria-describedby="loginPasswordError">
+              <p class="field__error" id="loginPasswordError" hidden></p>
+            </div>
+
+            <div class="auth-form__actions">
+              <button class="button button--primary button--block" type="submit" id="loginSubmitButton">
+                Sign in
+              </button>
+            </div>
+
+            <div class="auth-card__links">
+              <button type="button" class="text-button" id="toForgotPassword">Forgot password?</button>
+              <span class="auth-card__divider" aria-hidden="true">•</span>
+              <button type="button" class="text-button" id="toRegister">Create an account</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Registration Card -->
+        <div class="auth-card" id="authRegisterCard" hidden>
+          <div class="auth-card__head">
+            <div class="auth-card__badge" aria-hidden="true">
+              <svg class="icon"><use href="#i-user"></use></svg>
+            </div>
+            <h1 class="auth-card__title" id="registerTitle" tabindex="-1">Create an account</h1>
+            <p class="auth-card__sub">Isolated and private storage for your financial data.</p>
+          </div>
+
+          <form id="registerForm" class="auth-form" novalidate>
+            <p class="form-error" id="registerError" role="alert" hidden></p>
+
+            <div class="field">
+              <label for="registerEmail">Email address</label>
+              <input id="registerEmail" name="email" type="email" autocomplete="email" required placeholder="you@example.com" aria-describedby="registerEmailError">
+              <p class="field__error" id="registerEmailError" hidden></p>
+            </div>
+
+            <div class="field">
+              <div class="field__label-row">
+                <label for="registerPassword">Password</label>
+                <button type="button" class="text-button text-button--small toggle-password" data-target="registerPassword" aria-label="Show password">Show</button>
+              </div>
+              <input id="registerPassword" name="password" type="password" autocomplete="new-password" required placeholder="At least 6 characters" aria-describedby="registerPasswordError">
+              <p class="field__error" id="registerPasswordError" hidden></p>
+            </div>
+
+            <div class="field">
+              <div class="field__label-row">
+                <label for="registerConfirmPassword">Confirm password</label>
+                <button type="button" class="text-button text-button--small toggle-password" data-target="registerConfirmPassword" aria-label="Show confirm password">Show</button>
+              </div>
+              <input id="registerConfirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required placeholder="Repeat your password" aria-describedby="registerConfirmError">
+              <p class="field__error" id="registerConfirmError" hidden></p>
+            </div>
+
+            <div class="auth-form__actions">
+              <button class="button button--primary button--block" type="submit" id="registerSubmitButton">
+                Create account
+              </button>
+            </div>
+
+            <div class="auth-card__links">
+              <span>Already have an account?</span>
+              <button type="button" class="text-button" id="toLoginFromRegister">Sign in</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Verification Pending Card -->
+        <div class="auth-card auth-card--centered" id="authVerifyCard" hidden>
+          <div class="auth-card__badge auth-card__badge--success" aria-hidden="true">
+            <svg class="icon"><use href="#i-check"></use></svg>
+          </div>
+          <h1 class="auth-card__title" id="verifyTitle" tabindex="-1">Verify your email</h1>
+          <p class="auth-card__sub">We sent a confirmation link to <strong id="verifyEmailDisplay"></strong>.</p>
+          <p class="auth-card__instruction">Click the link in that email to activate your account and start using Spendly.</p>
+
+          <div class="auth-form__actions">
+            <button class="button button--quiet button--block" type="button" id="resendVerificationButton">
+              Resend verification email
+            </button>
+            <button class="button button--primary button--block" type="button" id="verifyBackToLogin">
+              Back to sign in
+            </button>
+          </div>
+          <p class="auth-card__status" id="resendStatus" role="status" hidden></p>
+        </div>
+
+        <!-- Forgot Password Card -->
+        <div class="auth-card" id="authForgotCard" hidden>
+          <div class="auth-card__head">
+            <div class="auth-card__badge" aria-hidden="true">
+              <svg class="icon"><use href="#i-lock"></use></svg>
+            </div>
+            <h1 class="auth-card__title" id="forgotTitle" tabindex="-1">Reset your password</h1>
+            <p class="auth-card__sub">Enter your email and we’ll send you a password reset link.</p>
+          </div>
+
+          <form id="forgotForm" class="auth-form" novalidate>
+            <p class="form-error" id="forgotError" role="alert" hidden></p>
+
+            <div class="field">
+              <label for="forgotEmail">Email address</label>
+              <input id="forgotEmail" name="email" type="email" autocomplete="email" required placeholder="you@example.com" aria-describedby="forgotEmailError">
+              <p class="field__error" id="forgotEmailError" hidden></p>
+            </div>
+
+            <div class="auth-form__actions">
+              <button class="button button--primary button--block" type="submit" id="forgotSubmitButton">
+                Send reset link
+              </button>
+            </div>
+
+            <div class="auth-card__links">
+              <button type="button" class="text-button" id="forgotBackToLogin">Cancel and back to sign in</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Forgot Password Sent Confirmation Card -->
+        <div class="auth-card auth-card--centered" id="authForgotSentCard" hidden>
+          <div class="auth-card__badge auth-card__badge--success" aria-hidden="true">
+            <svg class="icon"><use href="#i-check"></use></svg>
+          </div>
+          <h1 class="auth-card__title" id="forgotSentTitle" tabindex="-1">Reset link sent</h1>
+          <p class="auth-card__sub">If an account exists for <strong id="forgotSentEmailDisplay"></strong>, we’ve sent instructions to reset your password.</p>
+          <p class="auth-card__instruction">Check your inbox and spam folder. Click the link in the email to choose a new password.</p>
+
+          <div class="auth-form__actions">
+            <button class="button button--primary button--block" type="button" id="forgotSentBackToLogin">
+              Return to sign in
+            </button>
+          </div>
+        </div>
+
+        <!-- Set New Password Card -->
+        <div class="auth-card" id="authResetPasswordCard" hidden>
+          <div class="auth-card__head">
+            <div class="auth-card__badge" aria-hidden="true">
+              <svg class="icon"><use href="#i-lock"></use></svg>
+            </div>
+            <h1 class="auth-card__title" id="resetPasswordTitle" tabindex="-1">Set new password</h1>
+            <p class="auth-card__sub">Enter your new password below to update your account.</p>
+          </div>
+
+          <form id="resetPasswordForm" class="auth-form" novalidate>
+            <p class="form-error" id="resetPasswordError" role="alert" hidden></p>
+
+            <div class="field">
+              <div class="field__label-row">
+                <label for="newPassword">New password</label>
+                <button type="button" class="text-button text-button--small toggle-password" data-target="newPassword" aria-label="Show new password">Show</button>
+              </div>
+              <input id="newPassword" name="password" type="password" autocomplete="new-password" required placeholder="At least 6 characters" aria-describedby="newPasswordError">
+              <p class="field__error" id="newPasswordError" hidden></p>
+            </div>
+
+            <div class="field">
+              <div class="field__label-row">
+                <label for="confirmNewPassword">Confirm new password</label>
+                <button type="button" class="text-button text-button--small toggle-password" data-target="confirmNewPassword" aria-label="Show confirm new password">Show</button>
+              </div>
+              <input id="confirmNewPassword" name="confirmPassword" type="password" autocomplete="new-password" required placeholder="Repeat new password" aria-describedby="confirmNewPasswordError">
+              <p class="field__error" id="confirmNewPasswordError" hidden></p>
+            </div>
+
+            <div class="auth-form__actions">
+              <button class="button button--primary button--block" type="submit" id="resetPasswordSubmitButton">
+                Update password
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
       <section class="view" id="view-dashboard" aria-labelledby="dashboardTitle">
         <h1 class="visually-hidden" id="dashboardTitle" tabindex="-1">Spendly dashboard</h1>
 
@@ -806,7 +1025,17 @@
               <span class="data__text"><strong>Restore backup</strong><small>Replace local data from a JSON file</small></span>
               <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
             </button>
-            <button class="data__action data__action--danger" type="button" id="eraseAllData">
+            <div class="account-card" id="accountSettingsCard">
+            <div class="account-card__info">
+              <span class="account-card__label">Signed in account</span>
+              <strong class="account-card__email" id="settingsUserEmail"></strong>
+            </div>
+            <button class="button button--quiet button--block" type="button" id="settingsSignOutButton">
+              Sign out
+            </button>
+          </div>
+
+          <button class="data__action data__action--danger" type="button" id="eraseAllData">
               <span class="data__icon" aria-hidden="true"><svg class="icon"><use href="#i-trash"></use></svg></span>
               <span class="data__text"><strong>Erase all data</strong><small>Permanently remove all data from this browser</small></span>
               <svg class="icon data__chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>

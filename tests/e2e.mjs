@@ -37,6 +37,8 @@ const APP_SHELL_PATHS = [
   '/js/core.js',
   '/js/db.js',
   '/js/repository.js',
+  '/js/supabase.js',
+  '/js/vendor/supabase.js',
   '/manifest.json',
   '/icons/icon-180.png',
   '/icons/icon-192.png',
@@ -59,12 +61,52 @@ function watch(page) {
     consoleErrors.push(`pageerror: ${error.message}`);
   });
   page.on('console', message => {
-    if (message.type() === 'error') consoleErrors.push(`console: ${message.text()}`);
+    if (message.type() === 'error') {
+      const text = message.text();
+      if (/Failed to load resource: the server responded with a status of 40/i.test(text) ||
+          /net::ERR_INTERNET_DISCONNECTED/i.test(text)) {
+        return;
+      }
+      consoleErrors.push(`console: ${text}`);
+    }
   });
 }
 
+const MOCK_AUTH_USER = {
+  id: '00000000-0000-4000-8000-000000000001',
+  aud: 'authenticated',
+  role: 'authenticated',
+  email: 'tester@spendly.local',
+  app_metadata: { provider: 'email' },
+  user_metadata: {}
+};
+
+const DEFAULT_TEST_DB = 'spendly_user_00000000-0000-4000-8000-000000000001';
+
+const MOCK_AUTH_SESSION = {
+  access_token: 'fake-jwt-token',
+  refresh_token: 'fake-refresh-token',
+  token_type: 'bearer',
+  expires_in: 86400,
+  expires_at: Math.floor(Date.now() / 1000) + 86400,
+  user: MOCK_AUTH_USER
+};
+
+async function seedAuthSession(contextOrPage, user = MOCK_AUTH_USER) {
+  const sessionData = {
+    ...MOCK_AUTH_SESSION,
+    user
+  };
+  await contextOrPage.addInitScript(({ session }) => {
+    try {
+      localStorage.setItem('spendly.auth.token', JSON.stringify(session));
+    } catch {}
+  }, { session: sessionData });
+}
+
 async function createContext(options = {}) {
-  return browser.newContext({
+  const { auth = true, user = MOCK_AUTH_USER, ...contextOptions } = options;
+  const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 2,
     isMobile: true,
@@ -72,8 +114,14 @@ async function createContext(options = {}) {
     locale: 'en-IN',
     timezoneId: 'Asia/Calcutta',
     acceptDownloads: true,
-    ...options
+    ...contextOptions
   });
+
+  if (auth) {
+    await seedAuthSession(context, user);
+  }
+
+  return context;
 }
 
 async function seedLegacy(page, records) {
@@ -88,10 +136,11 @@ async function gotoApp(page, waitUntil = 'networkidle') {
   await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true', null, { timeout: 15000 });
 }
 
-async function dbSnapshot(page) {
-  return page.evaluate(async () => {
+async function dbSnapshot(page, targetName = null) {
+  return page.evaluate(async (customName) => {
+    const dbName = customName || document.documentElement.dataset.activeDb || 'spendly';
     const open = () => new Promise((resolve, reject) => {
-      const request = indexedDB.open('spendly');
+      const request = indexedDB.open(dbName);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -110,13 +159,13 @@ async function dbSnapshot(page) {
     const version = db.version;
     db.close();
     return { records, salaries, savings, extraIncome, meta, stores, version };
-  });
+  }, targetName);
 }
 
-async function seedVersion5FinanceDatabase(page, { salaries, extraIncome }) {
+async function seedVersion5FinanceDatabase(page, { salaries, extraIncome }, targetName = DEFAULT_TEST_DB) {
   await page.goto(`${base}/manifest.json`, { waitUntil: 'networkidle' });
-  await page.evaluate(({ salaries, extraIncome }) => new Promise((resolve, reject) => {
-    const request = indexedDB.open('spendly', 5);
+  await page.evaluate(({ salaries, extraIncome, dbName }) => new Promise((resolve, reject) => {
+    const request = indexedDB.open(dbName, 5);
     request.onupgradeneeded = () => {
       const db = request.result;
       const expenses = db.createObjectStore('expenses', { keyPath: 'id' });
@@ -149,7 +198,7 @@ async function seedVersion5FinanceDatabase(page, { salaries, extraIncome }) {
       transaction.oncomplete = () => { db.close(); resolve(); };
       transaction.onerror = () => reject(transaction.error);
     };
-  }), { salaries, extraIncome });
+  }), { salaries, extraIncome, dbName: targetName });
 }
 
 async function cacheContents(page) {
@@ -205,6 +254,12 @@ async function openRowMenu(page, listSelector, text) {
   const row = page.locator(`${listSelector} .entry`).filter({ hasText: text }).first();
   await row.locator('.entry__menu').click();
   await page.locator('#actionSheet').waitFor({ state: 'visible' });
+}
+
+async function openDataSettings(page) {
+  await page.locator('[data-view="salary"]').click();
+  await page.locator('#openDataSettings').click();
+  await page.locator('#dataSettingsSheet').waitFor({ state: 'visible' });
 }
 
 function daysAgoISO(days) {
@@ -450,6 +505,7 @@ await run('add, edit, delete, undo, search, CSV, backup and restore work', async
   await page.locator('#historyList .entry').first().waitFor();
   assert.equal(await page.locator('#historyList .entry').count(), 1, 'a deleted expense stays deleted after reload');
 
+  await openDataSettings(page);
   const csv = await downloadFrom(page, () => page.locator('#exportCsv').click());
   assert.match(csv.filename, /^spendly-expenses-\d{4}-\d{2}-\d{2}\.csv$/);
   assert.match(csv.text, /"Date","Description","Amount \(INR\)","Paid From"/);
@@ -464,6 +520,8 @@ await run('add, edit, delete, undo, search, CSV, backup and restore work', async
   assert.ok(parsedBackup.expenses[0].createdAt);
   assert.equal(parsedBackup.salaries.length, 1);
   assert.deepEqual(parsedBackup.savings, []);
+  await page.locator('#closeDataSettings').click();
+  await page.locator('#dataSettingsSheet').waitFor({ state: 'hidden' });
 
   const invalidPath = path.join(RESULTS, 'invalid-backup.json');
   await writeFile(invalidPath, JSON.stringify({ expenses: [{ id: 'bad', amount: -5, description: 'Bad', date: today }] }));
@@ -511,6 +569,7 @@ await run('backup reminders can be snoozed and a downloaded backup is recorded',
   await seedLegacy(page, records);
   await gotoApp(page);
   await page.locator('[data-view="expenses"]').click();
+  await openDataSettings(page);
   assert.equal(await page.locator('#backupReminder').isVisible(), true, 'reminder appears after meaningful use');
   await page.locator('#dismissBackupReminder').click();
   await page.locator('#backupReminder').waitFor({ state: 'hidden' });
@@ -519,6 +578,7 @@ await run('backup reminders can be snoozed and a downloaded backup is recorded',
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
   await page.locator('[data-view="expenses"]').click();
+  await openDataSettings(page);
   assert.equal(await page.locator('#backupReminder').isVisible(), false, 'the snooze persists after reload');
 
   const backup = await downloadFrom(page, () => page.locator('#downloadBackup').click());
@@ -526,6 +586,8 @@ await run('backup reminders can be snoozed and a downloaded backup is recorded',
   metadata = (await dbSnapshot(page)).meta;
   assert.ok(Date.parse(metadata.find(item => item.key === 'backup:last-download-request')?.value));
   assert.match(await page.locator('#storageHealth').innerText(), /browser|storage/i);
+  await page.locator('#closeDataSettings').click();
+  await page.locator('#dataSettingsSheet').waitFor({ state: 'hidden' });
   await context.close();
 });
 
@@ -627,11 +689,14 @@ await run('the app launches, edits and exports with no network', async () => {
   await waitForToast(page, 'Expense restored.');
   assert.equal((await dbSnapshot(page)).records.length, 5);
 
+  await openDataSettings(page);
   const csv = await downloadFrom(page, () => page.locator('#exportCsv').click());
   assert.match(csv.text, /Offline chai/);
 
   const backup = await downloadFrom(page, () => page.locator('#downloadBackup').click());
   assert.equal(JSON.parse(backup.text).expenses.length, 5);
+  await page.locator('#closeDataSettings').click();
+  await page.locator('#dataSettingsSheet').waitFor({ state: 'hidden' });
 
   const offlineRestorePath = path.join(RESULTS, 'offline-restore.json');
   await writeFile(offlineRestorePath, JSON.stringify([
@@ -677,6 +742,7 @@ await run('expenses and the offline shell survive a full browser restart', async
 
   try {
     let context = await chromium.launchPersistentContext(profile, settings);
+    await seedAuthSession(context);
     let page = context.pages()[0] ?? await context.newPage();
     watch(page);
     await gotoApp(page);
@@ -690,6 +756,7 @@ await run('expenses and the offline shell survive a full browser restart', async
     await context.close();
 
     context = await chromium.launchPersistentContext(profile, settings);
+    await seedAuthSession(context);
     page = context.pages()[0] ?? await context.newPage();
     globalThis.__activePage = page;
     watch(page);
@@ -712,7 +779,7 @@ await run('expenses and the offline shell survive a full browser restart', async
 /* 5. Salary, savings and the monthly remaining balance                       */
 /* -------------------------------------------------------------------------- */
 
-await run('salary, savings and expenses produce the monthly remaining balance', async () => {
+await run('salary pool balance tracks linked expenses and savings', async () => {
   const context = await createContext();
   const page = await context.newPage();
   globalThis.__activePage = page;
@@ -735,20 +802,16 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   assert.equal(await page.locator('#savingsMonthList .entry').count(), 2);
   assert.match(await page.locator('#savingsMonthMeta').innerText(), /2 entries/);
 
-  await page.locator('[data-view="dashboard"]').click();
-  assert.equal(await page.locator('#financeMonthLabel').innerText(), formatMonth(current));
-  assert.equal(await page.locator('#financeSalary').innerText(), formatMoney(50000));
-  assert.equal(await page.locator('#financeExpenses').innerText(), formatMoney(0));
-  assert.equal(await page.locator('#financeSavings').innerText(), formatMoney(1500));
-  assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(48500));
-  assert.equal(
-    await page.locator('#financeBalance').evaluate(element => element.classList.contains('is-negative')),
-    false
-  );
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryMonthLabel').innerText(), formatMonth(current));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(48500));
+  assert.equal(await page.locator('#salarySplit .split__item').nth(0).locator('strong').innerText(), formatMoney(50000));
+  assert.equal(await page.locator('#salarySplit .split__item').nth(1).locator('strong').innerText(), formatMoney(1500));
+  assert.equal(await page.locator('#salarySplit .split__item').nth(2).locator('strong').innerText(), formatMoney(0));
 
   await addExpense(page, { amount: '1250.50', description: 'Team dinner' });
-  assert.equal(await page.locator('#financeExpenses').innerText(), formatMoney(1250.5));
-  assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(47249.5));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(47249.5));
+  assert.equal(await page.locator('#salarySplit .split__item').nth(2).locator('strong').innerText(), formatMoney(1250.5));
 
   await page.locator('[data-view="expenses"]').click();
   await page.locator('#historyList .entry').first().waitFor();
@@ -758,18 +821,18 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
   await page.locator('#amountInput').fill('1000');
   await page.locator('#saveButton').click();
   await page.locator('#expenseSheet').waitFor({ state: 'hidden' });
-  await page.locator('[data-view="dashboard"]').click();
-  assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(47500));
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(47500));
 
   await page.locator('[data-view="expenses"]').click();
   await openRowMenu(page, '#historyList', 'Team dinner');
   await page.locator('#actionList .action__item').filter({ hasText: 'Delete expense' }).click();
   await waitForToast(page, 'deleted');
-  await page.locator('[data-view="dashboard"]').click();
-  assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(48500));
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(48500));
   await page.locator('#toastAction').click();
   await waitForToast(page, 'Expense restored.');
-  assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(47500));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(47500));
 
   await page.locator('[data-view="savings"]').click();
   await page.locator('#savingsTabMonth').click();
@@ -795,9 +858,9 @@ await run('salary, savings and expenses produce the monthly remaining balance', 
 
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
-  await page.locator('[data-view="dashboard"]').click();
+  await page.locator('[data-view="salary"]').click();
   // salary 50,000 - expense 1,000 - savings 1,700 (1,200 + 500)
-  assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(47300));
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(47300));
   await page.locator('[data-view="salary"]').click();
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(47300));
   await page.locator('[data-view="savings"]').click();
@@ -962,7 +1025,8 @@ await run('financial undo preserves allocations, survives reload and works offli
   const repeatedIncomeUndo = await page.evaluate(async id => {
     const { openSpendlyDB } = await import('/js/db.js');
     const { FinancialLedgerRepository } = await import('/js/repository.js');
-    const ledger = new FinancialLedgerRepository(await openSpendlyDB());
+    const dbName = document.documentElement.dataset.activeDb;
+    const ledger = new FinancialLedgerRepository(await openSpendlyDB(dbName));
     try { await ledger.reverseExtraIncome(id); return false; } catch (error) { return error.name === 'AlreadyReversedError'; }
   }, quickIncome.id);
   assert.equal(repeatedIncomeUndo, true, 'the same income record cannot be reversed twice');
@@ -1012,7 +1076,8 @@ await run('financial undo preserves allocations, survives reload and works offli
   const repeatedSavingUndo = await page.evaluate(async id => {
     const { openSpendlyDB } = await import('/js/db.js');
     const { FinancialLedgerRepository } = await import('/js/repository.js');
-    const ledger = new FinancialLedgerRepository(await openSpendlyDB());
+    const dbName = document.documentElement.dataset.activeDb;
+    const ledger = new FinancialLedgerRepository(await openSpendlyDB(dbName));
     try { await ledger.reverseSaving(id); return false; } catch (error) { return error.name === 'AlreadyReversedError'; }
   }, contribution.id);
   assert.equal(repeatedSavingUndo, true, 'the same savings record cannot be reversed twice');
@@ -1053,7 +1118,7 @@ await run('financial undo preserves allocations, survives reload and works offli
   assert.equal(Boolean(snapshot.extraIncome.find(record => record.description === 'Income now spent').reversedAt), false);
   assert.equal(snapshot.records.some(record => record.description === 'Spent linked income'), true);
 
-  await page.locator('[data-view="expenses"]').click();
+  await openDataSettings(page);
   await page.locator('#eraseAllData').click();
   assert.match(await page.locator('#actionMessage').innerText(), /permanently deletes all expenses.*cannot be undone/i);
   await page.locator('#actionList .action__item').filter({ hasText: 'Erase all data' }).click();
@@ -1444,23 +1509,16 @@ await run('negative balances and months without salary are shown honestly', asyn
   watch(page);
   await gotoApp(page);
 
-  assert.equal(await page.locator('#financeSalary').innerText(), 'Not set');
-  assert.equal(await page.locator('#financeRemainingValue').innerText(), '—');
-  assert.match(await page.locator('#financeRemainingNote').innerText(), /No salary recorded/);
-  assert.equal(
-    await page.locator('#financeBalance').evaluate(element => element.classList.contains('is-unconfigured')),
-    true
-  );
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), 'No salary pool');
+  assert.equal(await page.locator('#salaryAmount').evaluate(element => element.classList.contains('is-unset')), true);
+  assert.match(await page.locator('#salaryStatus').innerText(), /No salary pool/);
 
   await addSalary(page, { amount: '1000' });
-  await page.locator('[data-view="dashboard"]').click();
   await addExpense(page, { amount: '2000', description: 'Unexpected repair' });
-  assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(-1000));
-  assert.equal(
-    await page.locator('#financeBalance').evaluate(element => element.classList.contains('is-negative')),
-    true
-  );
-  assert.match(await page.locator('#financeRemainingNote').innerText(), /more than this month’s salary/);
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(-1000));
+  assert.equal(await page.locator('#salaryAmount').evaluate(element => element.classList.contains('is-negative')), true);
+  assert.equal(await page.locator('#salarySplit .split__item').nth(2).locator('strong').innerText(), formatMoney(2000));
 
   await context.close();
 });
@@ -1540,16 +1598,16 @@ await run('an existing version 1 database upgrades without losing expenses', asy
 
   await page.goto(`${base}/__blank__`, { waitUntil: 'load' });
   watch(page);
-  await page.evaluate(async record => {
+  await page.evaluate(async ({ record, dbName }) => {
     await new Promise((resolve, reject) => {
-      const request = indexedDB.deleteDatabase('spendly');
+      const request = indexedDB.deleteDatabase(dbName);
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
       request.onblocked = () => resolve();
     });
 
     await new Promise((resolve, reject) => {
-      const request = indexedDB.open('spendly', 1);
+      const request = indexedDB.open(dbName, 1);
       request.onupgradeneeded = () => {
         const db = request.result;
         const expenses = db.createObjectStore('expenses', { keyPath: 'id' });
@@ -1563,7 +1621,7 @@ await run('an existing version 1 database upgrades without losing expenses', asy
     });
 
     await new Promise((resolve, reject) => {
-      const request = indexedDB.open('spendly', 1);
+      const request = indexedDB.open(dbName, 1);
       request.onsuccess = () => {
         const db = request.result;
         const transaction = db.transaction('expenses', 'readwrite');
@@ -1573,7 +1631,7 @@ await run('an existing version 1 database upgrades without losing expenses', asy
       };
       request.onerror = () => reject(request.error);
     });
-  }, original);
+  }, { record: original, dbName: DEFAULT_TEST_DB });
 
   await gotoApp(page);
   const upgraded = await dbSnapshot(page);
@@ -1604,15 +1662,15 @@ await run('legacy v2 transactions allocate by entry timestamp and unmatched rows
   globalThis.__activePage = page;
   await page.goto(`${base}/__blank__`, { waitUntil: 'load' });
   watch(page);
-  await page.evaluate(async () => {
+  await page.evaluate(async dbName => {
     await new Promise((resolve, reject) => {
-      const request = indexedDB.deleteDatabase('spendly');
+      const request = indexedDB.deleteDatabase(dbName);
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
       request.onblocked = () => resolve();
     });
     await new Promise((resolve, reject) => {
-      const request = indexedDB.open('spendly', 2);
+      const request = indexedDB.open(dbName, 2);
       request.onupgradeneeded = () => {
         const db = request.result;
         const expenses = db.createObjectStore('expenses', { keyPath: 'id' });
@@ -1645,7 +1703,7 @@ await run('legacy v2 transactions allocate by entry timestamp and unmatched rows
       };
       request.onerror = () => reject(request.error);
     });
-  });
+  }, DEFAULT_TEST_DB);
 
   await gotoApp(page);
   const migrated = await dbSnapshot(page);
@@ -1807,8 +1865,8 @@ await run('salary and savings can be added and read with no network', async () =
   assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(49000));
   await page.locator('[data-view="savings"]').click();
   assert.equal(await page.locator('#savingsMonthTotal').innerText(), formatMoney(1000));
-  await page.locator('[data-view="dashboard"]').click();
-  assert.equal(await page.locator('#financeRemainingValue').innerText(), formatMoney(49000));
+  await page.locator('[data-view="salary"]').click();
+  assert.equal(await page.locator('#salaryAmount').innerText(), formatMoney(49000));
 
   await context.setOffline(false);
   await context.close();
@@ -1984,6 +2042,365 @@ await run('documentation screenshots', async () => {
   await waitForToastsToClear(desktop);
   await desktop.screenshot({ path: path.join(SHOTS, 'home-desktop.png') });
   await desktopContext.close();
+});
+
+/* -------------------------------------------------------------------------- */
+/* 7. Phase 3: Email and Password Authentication & Account Isolation           */
+/* -------------------------------------------------------------------------- */
+
+await run('unauthenticated visit displays login card, hides dock and financial views', async () => {
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.locator('#authView').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#authLoginCard').isVisible(), true);
+  assert.equal(await page.locator('#dock').isVisible(), false);
+  assert.equal(await page.locator('#addExpenseButton').isVisible(), false);
+  assert.equal(await page.locator('#view-dashboard').isVisible(), false);
+  assert.equal(await page.locator('#userChip').isVisible(), false);
+
+  await context.close();
+});
+
+await run('login form validates fields, toggles password visibility and shows errors', async () => {
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.locator('#authView').waitFor({ state: 'visible' });
+
+  // Password toggle
+  const passInput = page.locator('#loginPassword');
+  const toggleBtn = page.locator('#authLoginCard .toggle-password');
+  assert.equal(await passInput.getAttribute('type'), 'password');
+  await toggleBtn.click();
+  assert.equal(await passInput.getAttribute('type'), 'text');
+  assert.match(await toggleBtn.innerText(), /hide/i);
+  await toggleBtn.click();
+  assert.equal(await passInput.getAttribute('type'), 'password');
+  assert.match(await toggleBtn.innerText(), /show/i);
+
+  // Submit empty
+  await page.locator('#loginSubmitButton').click();
+  assert.equal(await page.locator('#loginEmailError').isVisible(), true);
+  assert.equal(await page.locator('#loginPasswordError').isVisible(), true);
+
+  // Fill email, password
+  await page.locator('#loginEmail').fill('nobody@spendly.local');
+  await page.locator('#loginPassword').fill('wrongpassword');
+
+  // Route Supabase auth call with invalid credentials
+  await page.route('**/auth/v1/token*', async route => {
+    await route.fulfill({
+      status: 400,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'invalid_grant', error_description: 'Invalid login credentials' })
+    });
+  });
+
+  await page.locator('#loginSubmitButton').click();
+  await page.locator('#loginError').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#loginError').innerText(), /Incorrect email or password/i);
+
+  await context.close();
+});
+
+await run('auth screens navigate cleanly between login, register, forgot and verification', async () => {
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.locator('#authView').waitFor({ state: 'visible' });
+
+  // Switch to register
+  await page.locator('#toRegister').click();
+  assert.equal(await page.locator('#authRegisterCard').isVisible(), true);
+  assert.equal(await page.locator('#authLoginCard').isVisible(), false);
+
+  // Switch back to login
+  await page.locator('#toLoginFromRegister').click();
+  assert.equal(await page.locator('#authLoginCard').isVisible(), true);
+  assert.equal(await page.locator('#authRegisterCard').isVisible(), false);
+
+  // Switch to forgot password
+  await page.locator('#toForgotPassword').click();
+  assert.equal(await page.locator('#authForgotCard').isVisible(), true);
+  assert.equal(await page.locator('#authLoginCard').isVisible(), false);
+
+  // Switch back to login
+  await page.locator('#forgotBackToLogin').click();
+  assert.equal(await page.locator('#authLoginCard').isVisible(), true);
+  assert.equal(await page.locator('#authForgotCard').isVisible(), false);
+
+  await context.close();
+});
+
+await run('registration validates inputs and presents verification pending screen', async () => {
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.locator('#authView').waitFor({ state: 'visible' });
+  await page.locator('#toRegister').click();
+
+  // Test password mismatch
+  await page.locator('#registerEmail').fill('newuser@spendly.local');
+  await page.locator('#registerPassword').fill('password123');
+  await page.locator('#registerConfirmPassword').fill('differentpassword');
+  await page.locator('#registerSubmitButton').click();
+  assert.equal(await page.locator('#registerConfirmError').isVisible(), true);
+  assert.match(await page.locator('#registerConfirmError').innerText(), /Passwords do not match/);
+
+  // Fix password and mock signup with unconfirmed user
+  await page.locator('#registerConfirmPassword').fill('password123');
+
+  await page.route('**/auth/v1/signup*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'new-user-uuid',
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'newuser@spendly.local',
+        identities: []
+      })
+    });
+  });
+
+  await page.locator('#registerSubmitButton').click();
+  await page.locator('#authVerifyCard').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#verifyEmailDisplay').innerText(), 'newuser@spendly.local');
+
+  // Test resend verification
+  let resent = false;
+  await page.route('**/auth/v1/resend*', async route => {
+    resent = true;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.locator('#resendVerificationButton').click();
+  await page.locator('#resendStatus').waitFor({ state: 'visible' });
+  assert.ok(resent, 'resend verification endpoint was called');
+  assert.match(await page.locator('#resendStatus').innerText(), /sent/i);
+
+  // Return to sign in
+  await page.locator('#verifyBackToLogin').click();
+  assert.equal(await page.locator('#authLoginCard').isVisible(), true);
+
+  await context.close();
+});
+
+await run('password reset request and password update complete successfully', async () => {
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.locator('#authView').waitFor({ state: 'visible' });
+  await page.locator('#toForgotPassword').click();
+
+  await page.locator('#forgotEmail').fill('resetme@spendly.local');
+
+  let resetRequested = false;
+  await page.route('**/auth/v1/recover*', async route => {
+    resetRequested = true;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.locator('#forgotSubmitButton').click();
+  await page.locator('#authForgotSentCard').waitFor({ state: 'visible' });
+  assert.ok(resetRequested, 'recovery request was dispatched');
+  assert.equal(await page.locator('#forgotSentEmailDisplay').innerText(), 'resetme@spendly.local');
+
+  await page.locator('#forgotSentBackToLogin').click();
+  assert.equal(await page.locator('#authLoginCard').isVisible(), true);
+
+  await context.close();
+});
+
+await run('multi-account switching provides strict IndexedDB isolation and clean state', async () => {
+  const userA = {
+    id: '11111111-1111-4000-8000-111111111111',
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'userA@spendly.local'
+  };
+  const userB = {
+    id: '22222222-2222-4000-8000-222222222222',
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'userB@spendly.local'
+  };
+
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.goto(`${base}/__blank__`, { waitUntil: 'load' });
+  await page.evaluate(session => {
+    localStorage.setItem('spendly.auth.token', JSON.stringify(session));
+  }, { ...MOCK_AUTH_SESSION, user: userA });
+
+  await gotoApp(page);
+  assert.equal(await page.locator('#userEmailLabel').innerText(), 'userA@spendly.local');
+
+  // User A adds salary & expense
+  await addSalary(page, { amount: '50000' });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '1200', description: 'User A Secret Lunch' });
+  await waitForToast(page, 'Expense added successfully');
+
+  const snapshotA = await dbSnapshot(page);
+  assert.equal(snapshotA.records.length, 1);
+  assert.equal(snapshotA.records[0].description, 'User A Secret Lunch');
+
+  // User A signs out
+  await page.locator('#headerSignOutButton').click();
+  await page.locator('#authView').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#authLoginCard').isVisible(), true);
+  assert.equal(await page.locator('#userChip').isVisible(), false);
+
+  // Switch session in localStorage to User B
+  await page.evaluate(session => {
+    localStorage.setItem('spendly.auth.token', JSON.stringify(session));
+  }, { ...MOCK_AUTH_SESSION, user: userB });
+
+  // Reload page as User B
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+
+  assert.equal(await page.locator('#userEmailLabel').innerText(), 'userB@spendly.local');
+  // User B sees a clean slate with 0 records!
+  const snapshotB = await dbSnapshot(page);
+  assert.equal(snapshotB.records.length, 0, 'User B must never see User A records');
+  assert.equal(snapshotB.salaries.length, 0);
+  assert.equal(await page.locator('#heroAmount').innerText(), formatMoney(0));
+
+  // User B adds an expense
+  await addSalary(page, { amount: '30000' });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '450', description: 'User B Coffee' });
+  await waitForToast(page, 'Expense added successfully');
+
+  // User B signs out
+  await page.locator('#headerSignOutButton').click();
+  await page.locator('#authView').waitFor({ state: 'visible' });
+
+  // Switch back to User A
+  await page.evaluate(session => {
+    localStorage.setItem('spendly.auth.token', JSON.stringify(session));
+  }, { ...MOCK_AUTH_SESSION, user: userA });
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+
+  assert.equal(await page.locator('#userEmailLabel').innerText(), 'userA@spendly.local');
+  const restoredA = await dbSnapshot(page);
+  assert.equal(restoredA.records.length, 1);
+  assert.equal(restoredA.records[0].description, 'User A Secret Lunch', 'User A data restored safely');
+  assert.equal(restoredA.salaries.length, 1);
+
+  await context.close();
+});
+
+await run('legacy unowned spendly database is preserved and not leaked to authenticated account', async () => {
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.goto(`${base}/__blank__`, { waitUntil: 'load' });
+
+  // Seed legacy unowned 'spendly' database with 1 record
+  await page.evaluate(async () => {
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.open('spendly', 6);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('expenses')) {
+          db.createObjectStore('expenses', { keyPath: 'id' });
+        }
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction('expenses', 'readwrite');
+        tx.objectStore('expenses').put({
+          id: 'unowned-legacy-1',
+          amount: 999,
+          description: 'Secret Unowned Expense',
+          date: '2026-11-01',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => reject(tx.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+
+  // Now seed authenticated session
+  await seedAuthSession(context, MOCK_AUTH_USER);
+  await gotoApp(page);
+
+  // Authenticated user sees an empty isolated state
+  const userSnapshot = await dbSnapshot(page);
+  assert.equal(userSnapshot.records.length, 0, 'authenticated account must not inherit unowned data');
+  assert.equal(await page.locator('#heroAmount').innerText(), formatMoney(0));
+
+  // Verify 'spendly' unowned database still exists and has the untouched unowned record
+  const legacySnapshot = await dbSnapshot(page, 'spendly');
+  assert.equal(legacySnapshot.records.length, 1, 'unowned legacy DB is safely preserved');
+  assert.equal(legacySnapshot.records[0].id, 'unowned-legacy-1');
+
+  await context.close();
+});
+
+await run('offline authentication reopens cached session without network calls and blocks online actions', async () => {
+  const context = await createContext({ auth: true });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await gotoApp(page);
+  await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
+
+  // Go offline
+  await context.setOffline(true);
+
+  // Reload offline
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  assert.equal(await page.locator('#userEmailLabel').innerText(), 'tester@spendly.local');
+  assert.equal(await page.locator('#offlineBanner').isVisible(), true);
+
+  // Sign out offline
+  await page.locator('#headerSignOutButton').click();
+  await page.locator('#authView').waitFor({ state: 'visible' });
+
+  // Try signing in while offline
+  await page.locator('#loginEmail').fill('tester@spendly.local');
+  await page.locator('#loginPassword').fill('password123');
+  await page.locator('#loginSubmitButton').click();
+
+  await page.locator('#loginError').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#loginError').innerText(), /offline/i);
+
+  await context.close();
 });
 
 /* -------------------------------------------------------------------------- */

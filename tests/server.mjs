@@ -46,7 +46,19 @@ export function createStaticServer() {
         return;
       }
 
-      const body = await readFile(filePath);
+      let body = await readFile(filePath);
+      if (pathname.endsWith('index.html')) {
+        try {
+          const envContent = await readFile(path.join(ROOT, '.env.local'), 'utf-8');
+          const urlMatch = envContent.match(/VITE_SUPABASE_URL\s*=\s*([^\r\n]+)/);
+          const keyMatch = envContent.match(/VITE_SUPABASE_PUBLISHABLE_KEY\s*=\s*([^\r\n]+)/);
+          if (urlMatch && keyMatch) {
+            const html = body.toString('utf-8');
+            const script = `<script>window.__ENV__ = { VITE_SUPABASE_URL: ${JSON.stringify(urlMatch[1].trim())}, VITE_SUPABASE_PUBLISHABLE_KEY: ${JSON.stringify(keyMatch[1].trim())} };</script>`;
+            body = Buffer.from(html.replace('</head>', `${script}</head>`), 'utf-8');
+          }
+        } catch { /* .env.local not found or unreadable */ }
+      }
       response.writeHead(200, {
         'Content-Type': MIME[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream',
         'Content-Length': body.length,

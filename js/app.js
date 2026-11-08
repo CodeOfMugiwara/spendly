@@ -47,12 +47,24 @@ import {
   validateExpenseInput
 } from './core.js';
 import {
+  getSpendlyDBName,
   IndexedDBExpenseStore,
   IndexedDBSalaryStore,
   IndexedDBSavingsStore,
   IndexedDBExtraIncomeStore,
   openSpendlyDB
 } from './db.js';
+import {
+  getSupabase,
+  hasSupabaseConfig,
+  signInUser,
+  signUpUser,
+  signOutUser,
+  requestPasswordReset,
+  updateUserPassword,
+  resendVerification,
+  formatAuthError
+} from './supabase.js';
 import {
   DuplicateMonthError,
   AlreadyReversedError,
@@ -101,6 +113,10 @@ const MONTH_NAMES = Array.from({ length: 12 }, (_, index) =>
 let offlineReady = Boolean(navigator.serviceWorker?.controller);
 
 const state = {
+  user: null,
+  database: null,
+  authScreen: 'login',
+  pendingVerificationEmail: '',
   repo: null,
   ledgerRepo: null,
   salaryRepo: null,
@@ -159,15 +175,214 @@ const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion:
 /* -------------------------------------------------------------------------- */
 
 bindEvents();
+bindAuthEvents();
 updateConnectionUI();
 setupDialogs();
 populateMonthOptions();
 setupServiceWorker();
-void initData();
+void initApp();
 
-async function initData() {
+async function initApp() {
+  if (!hasSupabaseConfig()) {
+    console.warn('Spendly: Supabase configuration missing. Check .env.local.');
+    showAuthScreen('login');
+    const errEl = $('loginError');
+    if (errEl) {
+      errEl.textContent = 'Configuration missing: Supabase URL and Publishable Key are required.';
+      errEl.hidden = false;
+    }
+    return;
+  }
+
+  let supabase;
   try {
-    const database = await openSpendlyDB();
+    supabase = getSupabase();
+  } catch (err) {
+    console.error('Could not initialize Supabase:', err);
+    showAuthScreen('login');
+    return;
+  }
+
+  const hash = window.location.hash || '';
+  const isRecoveryInUrl = hash.includes('type=recovery');
+
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+      if (session?.user) {
+        if (state.user?.id !== session.user.id || !state.ready) {
+          await handleAuthenticated(session.user);
+        } else {
+          state.user = session.user;
+          updateUserUI(session.user);
+        }
+      }
+    } else if (event === 'PASSWORD_RECOVERY') {
+      if (session?.user) {
+        state.user = session.user;
+      }
+      showAuthScreen('reset');
+    } else if (event === 'SIGNED_OUT') {
+      if (state.user) {
+        await handleLogout();
+      }
+    }
+  });
+
+  try {
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error) {
+      console.warn('Session restoration failed:', error);
+    }
+
+    if (session?.user) {
+      if (isRecoveryInUrl) {
+        state.user = session.user;
+        showAuthScreen('reset');
+      } else {
+        await handleAuthenticated(session.user);
+      }
+    } else {
+      showAuthScreen('login');
+    }
+  } catch (err) {
+    console.warn('Initial session check error, displaying login:', err);
+    showAuthScreen('login');
+  }
+}
+
+function showAuthScreen(screenName = 'login') {
+  state.authScreen = screenName;
+  const authView = $('authView');
+  if (authView) authView.hidden = false;
+
+  const dock = $('dock');
+  if (dock) dock.hidden = true;
+
+  const addBtn = $('addExpenseButton');
+  if (addBtn) addBtn.hidden = true;
+
+  for (const view of VIEWS) {
+    const el = $(`view-${view}`);
+    if (el) el.hidden = true;
+  }
+
+  const cards = {
+    login: $('authLoginCard'),
+    register: $('authRegisterCard'),
+    verify: $('authVerifyCard'),
+    forgot: $('authForgotCard'),
+    'forgot-sent': $('authForgotSentCard'),
+    reset: $('authResetPasswordCard')
+  };
+
+  for (const [name, card] of Object.entries(cards)) {
+    if (card) card.hidden = (name !== screenName);
+  }
+
+  const errorIds = ['loginError', 'registerError', 'forgotError', 'resetPasswordError'];
+  for (const id of errorIds) {
+    const el = $(id);
+    if (el) { el.hidden = true; el.textContent = ''; }
+  }
+
+  if (screenName === 'login') {
+    $('loginEmail')?.focus();
+  } else if (screenName === 'register') {
+    $('registerEmail')?.focus();
+  } else if (screenName === 'verify') {
+    $('verifyTitle')?.focus();
+  } else if (screenName === 'forgot') {
+    $('forgotEmail')?.focus();
+  } else if (screenName === 'forgot-sent') {
+    $('forgotSentTitle')?.focus();
+  } else if (screenName === 'reset') {
+    $('newPassword')?.focus();
+  }
+}
+
+function hideAuthScreen() {
+  const authView = $('authView');
+  if (authView) authView.hidden = true;
+
+  const dock = $('dock');
+  if (dock) dock.hidden = false;
+
+  const addBtn = $('addExpenseButton');
+  if (addBtn) addBtn.hidden = false;
+}
+
+function updateUserUI(user) {
+  const chip = $('userChip');
+  const avatar = $('userAvatar');
+  const emailLabel = $('userEmailLabel');
+  const settingsEmail = $('settingsUserEmail');
+
+  if (user && user.email) {
+    if (chip) chip.hidden = false;
+    if (emailLabel) emailLabel.textContent = user.email;
+    if (avatar) avatar.textContent = user.email.charAt(0).toUpperCase();
+    if (settingsEmail) settingsEmail.textContent = user.email;
+  } else {
+    if (chip) chip.hidden = true;
+    if (emailLabel) emailLabel.textContent = '';
+    if (avatar) avatar.textContent = 'U';
+    if (settingsEmail) settingsEmail.textContent = '';
+  }
+}
+
+function closeAccountData() {
+  if (state.database) {
+    try {
+      state.database.close();
+    } catch (err) {
+      console.warn('Error closing database:', err);
+    }
+    state.database = null;
+  }
+  state.repo = null;
+  state.salaryRepo = null;
+  state.savingsRepo = null;
+  state.extraIncomeStore = null;
+  state.ledgerRepo = null;
+
+  state.expenses = [];
+  state.salaries = [];
+  state.savings = [];
+  state.extraIncome = [];
+  state.editingExpenseId = null;
+  state.editingSalaryId = null;
+  state.editingSavingId = null;
+  state.editingExtraIncomeId = null;
+
+  state.user = null;
+  state.ready = false;
+  document.documentElement.dataset.appReady = 'false';
+  delete document.documentElement.dataset.activeDb;
+  updateUserUI(null);
+}
+
+async function handleAuthenticated(user) {
+  if (!user || !user.id) return;
+
+  if (state.user?.id === user.id && state.ready) {
+    state.user = user;
+    updateUserUI(user);
+    return;
+  }
+
+  if (state.database) {
+    closeAccountData();
+  }
+
+  state.user = user;
+  updateUserUI(user);
+
+  try {
+    const dbName = getSpendlyDBName(user.id);
+    document.documentElement.dataset.activeDb = dbName;
+    const database = await openSpendlyDB(dbName);
+    state.database = database;
+
     state.repo = new ExpenseRepository(new IndexedDBExpenseStore(database));
     state.salaryRepo = new SalaryRepository(new IndexedDBSalaryStore(database));
     state.savingsRepo = new SavingsRepository(new IndexedDBSavingsStore(database));
@@ -208,6 +423,7 @@ async function initData() {
     state.savingsMonth = initialRoute.savingsMonth;
     state.ready = true;
     document.documentElement.dataset.appReady = 'true';
+    hideAuthScreen();
     render();
     showView(initialRoute.view, { historyMode: 'replace', focus: false });
     applyLaunchParams();
@@ -228,9 +444,15 @@ async function initData() {
 
     void requestPersistentStorage();
   } catch (error) {
-    console.error('Spendly could not start:', error);
+    console.error('Spendly could not start account:', error);
     showFatal(error);
   }
+}
+
+async function handleLogout() {
+  closeAccountData();
+  showAuthScreen('login');
+  showToast('Signed out successfully.', { tone: 'success' });
 }
 
 function showFatal(error) {
@@ -360,7 +582,8 @@ async function recordBackupDownload() {
 
 function amountMarkup(value) {
   const { currency, integer, fraction } = formatMoneyParts(value);
-  return `<span class="amount__currency" aria-hidden="true">${currency}</span>${integer}<span class="amount__fraction" aria-hidden="true">.${fraction}</span>`;
+  const sign = Number(value) < 0 ? '-' : '';
+  return `${sign}<span class="amount__currency" aria-hidden="true">${currency}</span>${integer}<span class="amount__fraction" aria-hidden="true">.${fraction}</span>`;
 }
 
 function renderHero(summary) {
@@ -988,6 +1211,10 @@ function renderSavingsTab() {
 
 function showView(view, { historyMode = 'push', focus = true } = {}) {
   if (!VIEWS.includes(view)) return;
+  if (!state.user) {
+    showAuthScreen('login');
+    return;
+  }
   const changedView = state.view !== view;
   state.view = view;
   for (const name of VIEWS) $(`view-${name}`).hidden = name !== view;
@@ -1181,6 +1408,10 @@ function applyLaunchParams() {
 /* -------------------------------------------------------------------------- */
 
 function openExpenseSheet(id = null) {
+  if (!state.user) {
+    showAuthScreen('login');
+    return;
+  }
   if (!state.ready || !state.repo) return;
 
   const record = id ? state.expenses.find(expense => expense.id === id) : null;
@@ -1400,6 +1631,10 @@ function readSalaryMonthKey() {
 }
 
 function openSalarySheet(id = null, monthKey = state.salaryMonth) {
+  if (!state.user) {
+    showAuthScreen('login');
+    return;
+  }
   if (!state.ready || !state.salaryRepo) return;
 
   const record = id ? state.salaries.find(item => item.id === id) : null;
@@ -1546,6 +1781,10 @@ function defaultSavingDate(monthKey) {
 }
 
 function openSavingSheet(id = null, options = {}) {
+  if (!state.user) {
+    showAuthScreen('login');
+    return;
+  }
   if (!state.ready || !state.savingsRepo) return;
 
   const record = id ? state.savings.find(item => item.id === id) : null;
@@ -2857,3 +3096,298 @@ function setFieldError(name, message) {
   }
 }
 
+
+function bindAuthEvents() {
+  document.querySelectorAll('.toggle-password').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.target;
+      const input = $(targetId);
+      if (!input) return;
+      const isPassword = input.type === 'password';
+      input.type = isPassword ? 'text' : 'password';
+      btn.textContent = isPassword ? 'Hide' : 'Show';
+      btn.setAttribute('aria-label', `${isPassword ? 'Hide' : 'Show'} ${input.labels?.[0]?.textContent || 'password'}`);
+    });
+  });
+
+  $('toRegister')?.addEventListener('click', () => showAuthScreen('register'));
+  $('toLoginFromRegister')?.addEventListener('click', () => showAuthScreen('login'));
+  $('toForgotPassword')?.addEventListener('click', () => showAuthScreen('forgot'));
+  $('forgotBackToLogin')?.addEventListener('click', () => showAuthScreen('login'));
+  $('verifyBackToLogin')?.addEventListener('click', () => showAuthScreen('login'));
+  $('forgotSentBackToLogin')?.addEventListener('click', () => showAuthScreen('login'));
+
+  const doSignOut = async () => {
+    try {
+      await signOutUser();
+    } catch (err) {
+      console.warn('Sign out error:', err);
+    }
+    await handleLogout();
+  };
+
+  $('headerSignOutButton')?.addEventListener('click', doSignOut);
+  $('settingsSignOutButton')?.addEventListener('click', () => {
+    closeDialog($('dataSettingsSheet'));
+    void doSignOut();
+  });
+
+  // Login form
+  $('loginForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const emailInput = $('loginEmail');
+    const passInput = $('loginPassword');
+    const errorEl = $('loginError');
+    const submitBtn = $('loginSubmitButton');
+
+    errorEl.hidden = true;
+    errorEl.textContent = '';
+    $('loginEmailError').hidden = true;
+    $('loginPasswordError').hidden = true;
+
+    const email = emailInput.value.trim();
+    const password = passInput.value;
+
+    let hasError = false;
+    if (!email) {
+      $('loginEmailError').textContent = 'Email is required.';
+      $('loginEmailError').hidden = false;
+      hasError = true;
+    }
+    if (!password) {
+      $('loginPasswordError').textContent = 'Password is required.';
+      $('loginPasswordError').hidden = false;
+      hasError = true;
+    }
+    if (hasError) return;
+
+    if (!navigator.onLine) {
+      errorEl.textContent = 'You are offline. An internet connection is required to sign in.';
+      errorEl.hidden = false;
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.setAttribute('aria-busy', 'true');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Signing in…';
+
+    try {
+      const data = await signInUser({ email, password });
+      if (data?.user) {
+        await handleAuthenticated(data.user);
+      }
+    } catch (err) {
+      errorEl.textContent = formatAuthError(err);
+      errorEl.hidden = false;
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.removeAttribute('aria-busy');
+      submitBtn.textContent = originalText;
+    }
+  });
+
+  // Register form
+  $('registerForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const emailInput = $('registerEmail');
+    const passInput = $('registerPassword');
+    const confirmInput = $('registerConfirmPassword');
+    const errorEl = $('registerError');
+    const submitBtn = $('registerSubmitButton');
+
+    errorEl.hidden = true;
+    errorEl.textContent = '';
+    $('registerEmailError').hidden = true;
+    $('registerPasswordError').hidden = true;
+    $('registerConfirmError').hidden = true;
+
+    const email = emailInput.value.trim();
+    const password = passInput.value;
+    const confirmPassword = confirmInput.value;
+
+    let hasError = false;
+    if (!email || !/\S+@\S+\.\S+/.test(email)) {
+      $('registerEmailError').textContent = 'Please enter a valid email address.';
+      $('registerEmailError').hidden = false;
+      hasError = true;
+    }
+    if (!password || password.length < 6) {
+      $('registerPasswordError').textContent = 'Password must be at least 6 characters.';
+      $('registerPasswordError').hidden = false;
+      hasError = true;
+    }
+    if (password !== confirmPassword) {
+      $('registerConfirmError').textContent = 'Passwords do not match.';
+      $('registerConfirmError').hidden = false;
+      hasError = true;
+    }
+    if (hasError) return;
+
+    if (!navigator.onLine) {
+      errorEl.textContent = 'You are offline. An internet connection is required to create an account.';
+      errorEl.hidden = false;
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.setAttribute('aria-busy', 'true');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Creating account…';
+
+    try {
+      const data = await signUpUser({ email, password });
+      if (data?.session && data?.user) {
+        await handleAuthenticated(data.user);
+      } else {
+        state.pendingVerificationEmail = email;
+        $('verifyEmailDisplay').textContent = email;
+        showAuthScreen('verify');
+      }
+    } catch (err) {
+      errorEl.textContent = formatAuthError(err);
+      errorEl.hidden = false;
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.removeAttribute('aria-busy');
+      submitBtn.textContent = originalText;
+    }
+  });
+
+  // Resend verification
+  $('resendVerificationButton')?.addEventListener('click', async () => {
+    const btn = $('resendVerificationButton');
+    const statusEl = $('resendStatus');
+    statusEl.hidden = true;
+
+    if (!navigator.onLine) {
+      statusEl.textContent = 'You are offline. Please reconnect to resend the verification link.';
+      statusEl.hidden = false;
+      return;
+    }
+
+    btn.disabled = true;
+    try {
+      await resendVerification(state.pendingVerificationEmail);
+      statusEl.textContent = 'Verification email sent! Check your inbox.';
+      statusEl.hidden = false;
+    } catch (err) {
+      statusEl.textContent = formatAuthError(err);
+      statusEl.hidden = false;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Forgot password form
+  $('forgotForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const emailInput = $('forgotEmail');
+    const errorEl = $('forgotError');
+    const submitBtn = $('forgotSubmitButton');
+
+    errorEl.hidden = true;
+    errorEl.textContent = '';
+    $('forgotEmailError').hidden = true;
+
+    const email = emailInput.value.trim();
+    if (!email) {
+      $('forgotEmailError').textContent = 'Email is required.';
+      $('forgotEmailError').hidden = false;
+      return;
+    }
+
+    if (!navigator.onLine) {
+      errorEl.textContent = 'You are offline. An internet connection is required to reset your password.';
+      errorEl.hidden = false;
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.setAttribute('aria-busy', 'true');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Sending…';
+
+    try {
+      await requestPasswordReset(email);
+      $('forgotSentEmailDisplay').textContent = email;
+      showAuthScreen('forgot-sent');
+    } catch (err) {
+      errorEl.textContent = formatAuthError(err);
+      errorEl.hidden = false;
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.removeAttribute('aria-busy');
+      submitBtn.textContent = originalText;
+    }
+  });
+
+  // Reset password form
+  $('resetPasswordForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const passInput = $('newPassword');
+    const confirmInput = $('confirmNewPassword');
+    const errorEl = $('resetPasswordError');
+    const submitBtn = $('resetPasswordSubmitButton');
+
+    errorEl.hidden = true;
+    errorEl.textContent = '';
+    $('newPasswordError').hidden = true;
+    $('confirmNewPasswordError').hidden = true;
+
+    const password = passInput.value;
+    const confirmPassword = confirmInput.value;
+
+    let hasError = false;
+    if (!password || password.length < 6) {
+      $('newPasswordError').textContent = 'Password must be at least 6 characters.';
+      $('newPasswordError').hidden = false;
+      hasError = true;
+    }
+    if (password !== confirmPassword) {
+      $('confirmNewPasswordError').textContent = 'Passwords do not match.';
+      $('confirmNewPasswordError').hidden = false;
+      hasError = true;
+    }
+    if (hasError) return;
+
+    if (!navigator.onLine) {
+      errorEl.textContent = 'You are offline. An internet connection is required to update your password.';
+      errorEl.hidden = false;
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.setAttribute('aria-busy', 'true');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Updating…';
+
+    try {
+      const data = await updateUserPassword(password);
+      showToast('Password updated successfully!', { tone: 'success' });
+      window.history.replaceState({ spendly: true }, '', window.location.pathname);
+      if (data?.user) {
+        await handleAuthenticated(data.user);
+      } else {
+        showAuthScreen('login');
+      }
+    } catch (err) {
+      errorEl.textContent = formatAuthError(err);
+      errorEl.hidden = false;
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.removeAttribute('aria-busy');
+      submitBtn.textContent = originalText;
+    }
+  });
+
+  // Clear errors on typing
+  $('loginEmail')?.addEventListener('input', () => { $('loginEmailError').hidden = true; $('loginError').hidden = true; });
+  $('loginPassword')?.addEventListener('input', () => { $('loginPasswordError').hidden = true; $('loginError').hidden = true; });
+  $('registerEmail')?.addEventListener('input', () => { $('registerEmailError').hidden = true; $('registerError').hidden = true; });
+  $('registerPassword')?.addEventListener('input', () => { $('registerPasswordError').hidden = true; $('registerError').hidden = true; });
+  $('registerConfirmPassword')?.addEventListener('input', () => { $('registerConfirmError').hidden = true; $('registerError').hidden = true; });
+  $('forgotEmail')?.addEventListener('input', () => { $('forgotEmailError').hidden = true; $('forgotError').hidden = true; });
+  $('newPassword')?.addEventListener('input', () => { $('newPasswordError').hidden = true; $('resetPasswordError').hidden = true; });
+  $('confirmNewPassword')?.addEventListener('input', () => { $('confirmNewPasswordError').hidden = true; $('resetPasswordError').hidden = true; });
+}

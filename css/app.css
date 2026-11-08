@@ -3601,3 +3601,232 @@ svg {
 .income-card__titles--button:focus-visible .income-card__caret {
   opacity: 1;
 }
+
+/* ==========================================================================
+   Authentication & Account Isolation
+   ========================================================================== */
+
+.auth-view {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: calc(100vh - 120px);
+  min-height: calc(100dvh - 120px);
+  padding: clamp(16px, 4vw, 32px) var(--gutter);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  padding: clamp(24px, 5vw, 36px);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+.auth-card--centered {
+  text-align: center;
+}
+
+.auth-card__head {
+  margin-bottom: 24px;
+}
+
+.auth-card__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--mint);
+  color: var(--forest);
+  margin-bottom: 12px;
+}
+
+.auth-card__badge--success {
+  background: #e7f5eb;
+  color: #176b3a;
+}
+
+.auth-card__badge .icon {
+  width: 24px;
+  height: 24px;
+}
+
+.auth-card__title {
+  font-family: var(--font-display);
+  font-size: clamp(22px, 3.5vw, 26px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.auth-card__sub {
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.auth-card__instruction {
+  font-size: 14px;
+  color: var(--ink-soft);
+  margin: 16px 0 24px;
+  line-height: 1.5;
+}
+
+.auth-card__links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 20px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.auth-card__divider {
+  color: var(--line-strong);
+}
+
+.auth-card__status {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--forest);
+  text-align: center;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-form__actions {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field__label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.field__label-row label {
+  margin-bottom: 0;
+}
+
+.text-button--small {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 4px;
+  height: auto;
+  color: var(--forest);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dock[hidden],
+.user-chip[hidden],
+.auth-view[hidden],
+.auth-card[hidden],
+.account-card[hidden] {
+  display: none !important;
+}
+
+/* User identity chip in header */
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.user-chip__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--forest);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.user-chip__email {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.user-chip__button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  border-radius: 50%;
+  transition: color 0.15s, background 0.15s;
+}
+
+.user-chip__button:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.user-chip__button .icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Account card in Data Settings */
+.account-card {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin: 16px 0;
+}
+
+.account-card__info {
+  margin-bottom: 12px;
+}
+
+.account-card__label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.account-card__email {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 4px;
+  word-break: break-all;
+}

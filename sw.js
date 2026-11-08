@@ -12,7 +12,7 @@
  * The worker never opens IndexedDB. Updating the app cannot touch expenses.
  */
 
-const CACHE_VERSION = 'v21';
+const CACHE_VERSION = 'v23';
 const CACHE_PREFIX = 'spendly-';
 const CACHE_NAME = `${CACHE_PREFIX}shell-${CACHE_VERSION}`;
 
@@ -23,6 +23,8 @@ const APP_SHELL = [
   './js/core.js',
   './js/db.js',
   './js/repository.js',
+  './js/supabase.js',
+  './js/vendor/supabase.js',
   './manifest.json',
   './icons/icon-180.png',
   './icons/icon-192.png',
@@ -107,7 +109,13 @@ async function handleNavigation(request) {
 
 async function cacheFirst(request) {
   const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
+  const url = new URL(request.url);
+  // Vite's dev and preview servers send `Vary: Origin` for static files.
+  // Those same-origin app assets do not vary by requesting origin, so ignore
+  // that header when matching files while retaining normal Vary semantics for
+  // extensionless requests such as future API endpoints.
+  const isStaticAsset = /\.[a-z0-9]+$/i.test(url.pathname);
+  const cached = await cache.match(request, { ignoreVary: isStaticAsset });
   if (cached) return cached;
 
   try {

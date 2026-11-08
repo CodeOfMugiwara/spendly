@@ -1,5 +1,6 @@
 [build]
-  publish = "."
+  command = "npm run build"
+  publish = "dist"
 
 # The HTML, service worker and JavaScript should always be revalidated so a new
 # deployment is picked up. The service worker owns the offline cache.
