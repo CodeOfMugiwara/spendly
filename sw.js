@@ -12,7 +12,7 @@
  * The worker never opens IndexedDB. Updating the app cannot touch expenses.
  */
 
-const CACHE_VERSION = 'v23';
+const CACHE_VERSION = 'v24';
 const CACHE_PREFIX = 'spendly-';
 const CACHE_NAME = `${CACHE_PREFIX}shell-${CACHE_VERSION}`;
 
@@ -42,7 +42,10 @@ self.addEventListener('install', event => {
     // generation is complete and internally consistent.
     await cache.addAll(APP_SHELL.map(path => new Request(
       new URL(path, SCOPE).href,
-      { cache: 'reload' }
+      {
+        cache: 'reload',
+        headers: path.endsWith('.css') ? { 'Accept': 'text/css,*/*;q=0.1' } : undefined
+      }
     )));
     // A first install activates automatically. An update waits for the page to
     // offer "Refresh", so a form in progress is never interrupted.
@@ -116,12 +119,22 @@ async function cacheFirst(request) {
   // extensionless requests such as future API endpoints.
   const isStaticAsset = /\.[a-z0-9]+$/i.test(url.pathname);
   const cached = await cache.match(request, { ignoreVary: isStaticAsset });
-  if (cached) return cached;
+  if (cached) {
+    const isCss = url.pathname.endsWith('.css');
+    const contentType = cached.headers.get('content-type') || '';
+    if (!isCss || contentType.includes('text/css')) {
+      return cached;
+    }
+  }
 
   try {
     const response = await fetch(request);
     if (response.ok && response.status === 200 && response.type === 'basic') {
-      await cache.put(request, response.clone());
+      const isCss = url.pathname.endsWith('.css');
+      const contentType = response.headers.get('content-type') || '';
+      if (!isCss || contentType.includes('text/css')) {
+        await cache.put(request, response.clone());
+      }
     }
     return response;
   } catch {
