@@ -404,11 +404,11 @@ async function handleAuthenticated(user) {
     const database = await openSpendlyDB(dbName);
     state.database = database;
 
+    state.ledgerRepo = new FinancialLedgerRepository(database, { ownerUserId: user.id });
     state.repo = new ExpenseRepository(new IndexedDBExpenseStore(database));
-    state.salaryRepo = new SalaryRepository(new IndexedDBSalaryStore(database));
+    state.salaryRepo = new SalaryRepository(new IndexedDBSalaryStore(database), { ledgerRepo: state.ledgerRepo });
     state.savingsRepo = new SavingsRepository(new IndexedDBSavingsStore(database));
     state.extraIncomeStore = new IndexedDBExtraIncomeStore(database);
-    state.ledgerRepo = new FinancialLedgerRepository(database);
 
     let migration;
     try {

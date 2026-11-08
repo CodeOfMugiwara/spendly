@@ -9,8 +9,32 @@
 export const STORAGE_KEY = 'spendly_expenses_v1';
 export const DB_NAME = 'spendly';
 // v1: expenses + meta. v2 adds salaries/savings, v3 relationship indexes,
-// v4 supports external funding, v5 adds Extra Income, and v6 indexes its salary link.
-export const DB_VERSION = 6;
+// v4 supports external funding, v5 adds Extra Income, v6 indexes its salary link,
+// and v7 introduces the account-scoped financial sync outbox and sync metadata.
+export const DB_VERSION = 7;
+export const OUTBOX_STORE = 'outbox';
+export const OUTBOX_STATUS = Object.freeze({
+  PENDING: 'pending',
+  ACKNOWLEDGED: 'acknowledged',
+  BLOCKED: 'blocked'
+});
+
+/** Generate a valid RFC 4122 v4 UUID compatible with PostgreSQL. */
+export function generateUUID() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+/** Validate whether a string conforms to standard UUID format. */
+export function isValidUUID(str) {
+  return typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+}
 
 export const PERIODS = Object.freeze(['week', 'month', 'quarter', 'year']);
 

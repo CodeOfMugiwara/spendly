@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "start": "node tests/server.mjs",
-    "test": "node --test tests/unit/core.test.mjs tests/unit/repository.test.mjs tests/unit/finance.test.mjs tests/unit/finance-repository.test.mjs tests/unit/auth.test.mjs",
+    "test": "node --test tests/unit/core.test.mjs tests/unit/repository.test.mjs tests/unit/finance.test.mjs tests/unit/finance-repository.test.mjs tests/unit/auth.test.mjs tests/unit/outbox.test.mjs",
     "test:e2e": "node tests/e2e.mjs"
   },
   "devDependencies": {

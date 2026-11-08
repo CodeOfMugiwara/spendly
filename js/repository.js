@@ -8,6 +8,10 @@
 
 import {
   STORAGE_KEY,
+  OUTBOX_STORE,
+  OUTBOX_STATUS,
+  generateUUID,
+  isValidUUID,
   computeSalaryPool,
   computeSavingsBalance,
   extraIncomeRemaining,
@@ -348,6 +352,7 @@ export class SalaryRepository {
   constructor(store, options = {}) {
     if (!store) throw new Error('A storage adapter is required.');
     this.store = store;
+    this.ledgerRepo = options.ledgerRepo ?? null;
     this.now = options.now ?? (() => new Date());
     this.makeId = options.makeId ?? defaultMakeId;
   }
@@ -368,6 +373,7 @@ export class SalaryRepository {
   }
 
   async create(input) {
+    if (this.ledgerRepo) return this.ledgerRepo.createSalary(input);
     const checked = validateSalaryInput(input);
     if (!checked.ok) throw new ValidationError(checked.errors, 'These salary details are not valid.');
 
@@ -397,6 +403,7 @@ export class SalaryRepository {
   }
 
   async update(id, input) {
+    if (this.ledgerRepo) return this.ledgerRepo.updateSalary(id, input);
     const existing = await this.store.get(id);
     if (!existing) throw new NotFoundError(id, 'That salary record no longer exists.');
 
@@ -426,17 +433,19 @@ export class SalaryRepository {
   }
 
   async remove(id) {
+    if (this.ledgerRepo) return this.ledgerRepo.deleteSalaryIfUnused(id);
     await this.store.delete(id);
   }
 
   /** Put a previously validated record back (used by "Undo"). */
   async restore(record) {
+    if (this.ledgerRepo) return this.ledgerRepo.restoreSalary(record);
     const checked = normalizeSalaryRecord(record, { now: this.now, makeId: this.makeId });
     if (!checked.ok) throw new ValidationError(checked.errors, 'That salary record could not be restored.');
     try {
       await this.store.put(checked.value);
     } catch (error) {
-      if (isConstraintError(error)) throw new DuplicateMonthError(checked.value.monthKey);
+      if (isConstraintError(error)) throw new DuplicateMonthError(record.monthKey);
       throw error;
     }
     return checked.value;
@@ -591,11 +600,87 @@ const FINANCIAL_STORES = ['expenses', 'salaries', 'savings', 'meta', 'extraIncom
  * IndexedDB transaction so a failure cannot leave only half a money movement.
  */
 export class FinancialLedgerRepository {
+  #inferredUserId;
+
   constructor(db, options = {}) {
     if (!db) throw new Error('A database connection is required.');
     this.db = db;
     this.now = options.now ?? (() => new Date());
     this.makeId = options.makeId ?? defaultMakeId;
+    this.makeOperationId = options.makeOperationId ?? generateUUID;
+    this.#inferredUserId = null;
+    if (typeof db.name === 'string' && db.name.startsWith('spendly_user_')) {
+      this.#inferredUserId = db.name.slice('spendly_user_'.length);
+    }
+    this.ownerUserId = options.ownerUserId !== undefined ? options.ownerUserId : this.#inferredUserId;
+    if (this.#inferredUserId && this.ownerUserId && this.ownerUserId !== this.#inferredUserId) {
+      throw new Error(`Owner user ID mismatch: provided '${this.ownerUserId}', but database name is '${db.name}'`);
+    }
+  }
+
+  #storesWithOutbox(baseStores) {
+    const stores = new Set(baseStores);
+    if (this.ownerUserId && this.db.objectStoreNames.contains('outbox')) {
+      stores.add('outbox');
+      if (this.db.objectStoreNames.contains('meta')) {
+        stores.add('meta');
+      }
+    }
+    return Array.from(stores);
+  }
+
+  #getNextSequence(collections, snapshots) {
+    let metaRecord = snapshots.meta?.find(item => item.key === 'sync:localSequence');
+    const next = (Number(metaRecord?.value) || 0) + 1;
+    if (collections.meta) {
+      collections.meta.put({ key: 'sync:localSequence', value: next });
+    }
+    if (snapshots.meta) {
+      if (metaRecord) {
+        metaRecord.value = next;
+      } else {
+        snapshots.meta.push({ key: 'sync:localSequence', value: next });
+      }
+    }
+    return next;
+  }
+
+  #enqueueOperation(collections, snapshots, operationData) {
+    if (!this.ownerUserId) return null;
+    if (!collections.outbox) return null;
+
+    if (this.#inferredUserId && this.ownerUserId !== this.#inferredUserId) {
+      throw new Error(`Account ownership mismatch: repository user ${this.ownerUserId} does not match database user ${this.#inferredUserId}`);
+    }
+
+    const nextSeq = this.#getNextSequence(collections, snapshots);
+    const operationId = operationData.operationId ?? this.makeOperationId();
+    if (!isValidUUID(operationId)) {
+      throw new Error(`Invalid UUID for outbox operation: ${operationId}`);
+    }
+
+    const record = {
+      operationId,
+      ownerUserId: this.ownerUserId,
+      operationType: operationData.operationType,
+      entityType: operationData.entityType,
+      entityId: operationData.entityId,
+      payload: operationData.payload ?? {},
+      createdAt: operationData.createdAt ?? this.now().toISOString(),
+      sequence: nextSeq,
+      status: OUTBOX_STATUS.PENDING,
+      attemptCount: 0,
+      lastAttemptAt: null,
+      lastError: null,
+      dependsOn: operationData.dependsOn ?? null,
+      schemaVersion: 1
+    };
+
+    collections.outbox.add(record);
+    if (snapshots.outbox) {
+      snapshots.outbox.push(record);
+    }
+    return record;
   }
 
   getMetadata(key) {
@@ -866,7 +951,7 @@ export class FinancialLedgerRepository {
     if (!checked.ok) throw new ValidationError(checked.errors);
     const paymentSource = ['savings', 'others'].includes(input.paymentSource) ? input.paymentSource : 'salary';
     const timestamp = this.now().toISOString();
-    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings']), 'readwrite', ({ collections, snapshots }) => {
       const activeSalary = findActiveSalary(snapshots.salaries);
       if (paymentSource === 'salary' && !activeSalary) throw new NoActiveSalaryError();
       const expense = {
@@ -876,17 +961,29 @@ export class FinancialLedgerRepository {
         createdAt: timestamp,
         updatedAt: timestamp
       };
+      let linkedWithdrawal = null;
       if (paymentSource === 'savings') {
         const amountPaise = Math.round(expense.amount * 100);
         const balance = computeSavingsBalance(snapshots.savings);
         if (balance.balancePaise < amountPaise) throw new InsufficientSavingsError(balance.balancePaise);
-        collections.savings.add({
+        linkedWithdrawal = {
           id: this.makeId(), monthKey: expense.date.slice(0, 7), amount: expense.amount, amountPaise,
           date: expense.date, description: expense.description, type: 'withdrawal', expenseId: expense.id,
           createdAt: timestamp, updatedAt: timestamp
-        });
+        };
+        collections.savings.add(linkedWithdrawal);
       }
       collections.expenses.add(expense);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'expense:create',
+        entityType: 'expense',
+        entityId: expense.id,
+        payload: {
+          expense,
+          linkedWithdrawal: linkedWithdrawal ?? null
+        },
+        createdAt: timestamp
+      });
       return expense;
     });
   }
@@ -895,7 +992,7 @@ export class FinancialLedgerRepository {
     const checked = validateExpenseInput(input);
     if (!checked.ok) throw new ValidationError(checked.errors);
     const timestamp = this.now().toISOString();
-    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings']), 'readwrite', ({ collections, snapshots }) => {
       const existing = snapshots.expenses.find(record => record.id === id);
       if (!existing) throw new NotFoundError(id);
       const source = ['savings', 'others'].includes(input.paymentSource) ? input.paymentSource : 'salary';
@@ -916,33 +1013,64 @@ export class FinancialLedgerRepository {
       // A saved source is an explicit resolution, including Savings and Others.
       delete expense.allocationStatus;
 
+      let newWithdrawal = null;
+      let removedWithdrawalId = null;
       if (source === 'savings') {
         const balance = computeSavingsBalance(snapshots.savings);
         const available = balance.balancePaise + (withdrawal ? Math.round(Number(withdrawal.amount) * 100) : 0);
         const newAmountPaise = Math.round(expense.amount * 100);
         if (available < newAmountPaise) throw new InsufficientSavingsError(available);
-        const newWithdrawal = {
+        newWithdrawal = {
           id: withdrawal?.id ?? this.makeId(), monthKey: expense.date.slice(0, 7), amount: expense.amount,
           amountPaise: newAmountPaise, date: expense.date, description: expense.description,
           type: 'withdrawal', expenseId: expense.id, createdAt: withdrawal?.createdAt ?? timestamp, updatedAt: timestamp
         };
         collections.savings.put(newWithdrawal);
       } else if (withdrawal) {
+        removedWithdrawalId = withdrawal.id;
         collections.savings.delete(withdrawal.id);
       }
       collections.expenses.put(expense);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'expense:update',
+        entityType: 'expense',
+        entityId: expense.id,
+        payload: {
+          expense,
+          previousExpense: existing,
+          linkedWithdrawal: newWithdrawal ?? null,
+          removedWithdrawalId: removedWithdrawalId ?? null
+        },
+        createdAt: timestamp
+      });
       return expense;
     });
   }
 
   removeExpense(id) {
-    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    const timestamp = this.now().toISOString();
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings']), 'readwrite', ({ collections, snapshots }) => {
       const expense = snapshots.expenses.find(record => record.id === id);
       if (!expense) throw new NotFoundError(id);
       collections.expenses.delete(id);
+      let deletedWithdrawal = null;
       for (const record of snapshots.savings) {
-        if (record.type === 'withdrawal' && record.expenseId === id) collections.savings.delete(record.id);
+        if (record.type === 'withdrawal' && record.expenseId === id) {
+          deletedWithdrawal = record;
+          collections.savings.delete(record.id);
+        }
       }
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'expense:delete',
+        entityType: 'expense',
+        entityId: id,
+        payload: {
+          expenseId: id,
+          deletedExpense: expense,
+          deletedWithdrawal: deletedWithdrawal ?? null
+        },
+        createdAt: timestamp
+      });
       return expense;
     });
   }
@@ -951,19 +1079,32 @@ export class FinancialLedgerRepository {
     const checked = normalizeExpenseRecord(raw, { now: this.now, makeId: this.makeId });
     if (!checked.ok) throw new ValidationError(checked.errors, 'That expense could not be restored.');
     const expense = checked.value;
-    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    const timestamp = this.now().toISOString();
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings']), 'readwrite', ({ collections, snapshots }) => {
       if (snapshots.expenses.some(record => record.id === expense.id)) return expense;
+      let linkedWithdrawal = null;
       if (expense.paymentSource === 'savings') {
         const amountPaise = Math.round(expense.amount * 100);
         const balance = computeSavingsBalance(snapshots.savings);
         if (balance.balancePaise < amountPaise) throw new InsufficientSavingsError(balance.balancePaise);
-        collections.savings.add({
+        linkedWithdrawal = {
           id: this.makeId(), monthKey: expense.date.slice(0, 7), amount: expense.amount, amountPaise,
           date: expense.date, description: expense.description, type: 'withdrawal', expenseId: expense.id,
           createdAt: expense.createdAt, updatedAt: expense.updatedAt
-        });
+        };
+        collections.savings.add(linkedWithdrawal);
       }
       collections.expenses.add(expense);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'expense:restore',
+        entityType: 'expense',
+        entityId: expense.id,
+        payload: {
+          expense,
+          linkedWithdrawal: linkedWithdrawal ?? null
+        },
+        createdAt: timestamp
+      });
       return expense;
     });
   }
@@ -973,7 +1114,7 @@ export class FinancialLedgerRepository {
     const checked = validateSavingInput(input, now);
     if (!checked.ok) throw new ValidationError(checked.errors, 'These savings details are not valid.');
     const timestamp = now.toISOString();
-    return this.#transaction(['expenses', 'salaries', 'savings', 'extraIncome'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings', 'extraIncome']), 'readwrite', ({ collections, snapshots }) => {
       const activeSalary = findActiveSalary(snapshots.salaries);
       if (!activeSalary) throw new NoActiveSalaryError();
       const pool = computeSalaryPool(activeSalary, snapshots.expenses, snapshots.savings, snapshots.extraIncome);
@@ -998,6 +1139,13 @@ export class FinancialLedgerRepository {
         createdAt: timestamp, updatedAt: timestamp
       };
       collections.savings.add(record);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'savings:contribution',
+        entityType: 'saving',
+        entityId: record.id,
+        payload: { saving: record },
+        createdAt: timestamp
+      });
       return record;
     });
   }
@@ -1007,9 +1155,16 @@ export class FinancialLedgerRepository {
     if (!checked.ok) throw new ValidationError(checked.errors, 'These savings details are not valid.');
     const timestamp = this.now().toISOString();
     const sourceType = ['gift', 'bonus', 'other'].includes(input.sourceType) ? input.sourceType : 'other';
-    return this.#transaction(['savings'], 'readwrite', ({ collections }) => {
+    return this.#transaction(this.#storesWithOutbox(['savings']), 'readwrite', ({ collections, snapshots }) => {
       const record = { id: this.makeId(), ...checked.value, type: 'external_contribution', sourceType, createdAt: timestamp, updatedAt: timestamp };
       collections.savings.add(record);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'savings:external_contribution',
+        entityType: 'saving',
+        entityId: record.id,
+        payload: { saving: record },
+        createdAt: timestamp
+      });
       return record;
     });
   }
@@ -1019,7 +1174,7 @@ export class FinancialLedgerRepository {
     const checked = validateSavingInput(input, now);
     if (!checked.ok) throw new ValidationError(checked.errors, 'These savings details are not valid.');
     const timestamp = now.toISOString();
-    return this.#transaction(['expenses', 'salaries', 'savings', 'extraIncome'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings', 'extraIncome']), 'readwrite', ({ collections, snapshots }) => {
       const existing = snapshots.savings.find(record => record.id === id);
       if (!existing) throw new NotFoundError(id, 'That savings entry no longer exists.');
       if (existing.reversedAt) throw new AlreadyReversedError();
@@ -1081,6 +1236,13 @@ export class FinancialLedgerRepository {
             : Math.max(0, oldAmountPaise - oldAllocations.reduce((sum, item) => sum + item.amountPaise, 0));
           record.extraIncomeAllocations = [...oldAllocations];
           collections.savings.put(record);
+          this.#enqueueOperation(collections, snapshots, {
+            operationType: 'savings:update',
+            entityType: 'saving',
+            entityId: record.id,
+            payload: { saving: record, previousSaving: existing },
+            createdAt: timestamp
+          });
           return record;
         }
         const priorSalaryAllocation = existing.type === 'contribution' ? Number(existing.salaryAllocationPaise ?? oldAmountPaise) : 0;
@@ -1094,7 +1256,8 @@ export class FinancialLedgerRepository {
         record.extraIncomeAllocations = [];
         for (const entry of [...poolIncome].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
           if (!remaining) break;
-          const previouslyAllocated = (existing.extraIncomeAllocations ?? []).filter(item => item.extraIncomeRecordId === entry.id).reduce((sum, item) => sum + item.amountPaise, 0);
+          const previouslyAllocated = (existing.extraIncomeAllocations ?? [])
+            .filter(item => item.extraIncomeRecordId === entry.id).reduce((sum, item) => sum + item.amountPaise, 0);
           const available = Math.max(0, Math.round(extraIncomeRemaining(entry, snapshots.savings) * 100) + previouslyAllocated);
           const amountPaise = Math.min(available, remaining);
           if (amountPaise) record.extraIncomeAllocations.push({ extraIncomeRecordId: entry.id, amountPaise });
@@ -1103,12 +1266,20 @@ export class FinancialLedgerRepository {
         record.salaryAllocationPaise = newAmountPaise - record.extraIncomeAllocations.reduce((sum, item) => sum + item.amountPaise, 0);
       }
       collections.savings.put(record);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'savings:update',
+        entityType: 'saving',
+        entityId: record.id,
+        payload: { saving: record, previousSaving: existing },
+        createdAt: timestamp
+      });
       return record;
     });
   }
 
   removeSaving(id) {
-    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    const timestamp = this.now().toISOString();
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings']), 'readwrite', ({ collections, snapshots }) => {
       const record = snapshots.savings.find(item => item.id === id);
       if (!record) throw new NotFoundError(id, 'That savings entry no longer exists.');
       if (record.reversedAt) throw new AlreadyReversedError();
@@ -1118,6 +1289,13 @@ export class FinancialLedgerRepository {
         throw new InsufficientSavingsError(balance.balancePaise - Math.round(Number(record.amount) * 100));
       }
       collections.savings.delete(id);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'savings:delete',
+        entityType: 'saving',
+        entityId: id,
+        payload: { savingId: id, deletedSaving: record },
+        createdAt: timestamp
+      });
       return record;
     });
   }
@@ -1126,7 +1304,8 @@ export class FinancialLedgerRepository {
     const checked = normalizeSavingRecord(raw, { now: this.now, makeId: this.makeId });
     if (!checked.ok) throw new ValidationError(checked.errors, 'That savings entry could not be restored.');
     const record = checked.value;
-    return this.#transaction(['expenses', 'salaries', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    const timestamp = this.now().toISOString();
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings']), 'readwrite', ({ collections, snapshots }) => {
       if (snapshots.savings.some(item => item.id === record.id)) return record;
       if (record.type === 'withdrawal') {
         const expense = snapshots.expenses.find(item => item.id === record.expenseId);
@@ -1135,6 +1314,13 @@ export class FinancialLedgerRepository {
         if (balance.balancePaise < Math.round(record.amount * 100)) throw new InsufficientSavingsError(balance.balancePaise);
       }
       collections.savings.add(record);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'savings:restore',
+        entityType: 'saving',
+        entityId: record.id,
+        payload: { saving: record },
+        createdAt: timestamp
+      });
       return record;
     });
   }
@@ -1144,11 +1330,18 @@ export class FinancialLedgerRepository {
     if (!checked.ok) throw new ValidationError(checked.errors, 'These extra income details are not valid.');
     const source = ['freelancing', 'part-time', 'bonus', 'other'].includes(input.source) ? input.source : 'other';
     const timestamp = this.now().toISOString();
-    return this.#transaction(['salaries', 'extraIncome'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(this.#storesWithOutbox(['salaries', 'extraIncome']), 'readwrite', ({ collections, snapshots }) => {
       const salary = snapshots.salaries.find(item => item.id === input.salaryRecordId);
       if (!salary) throw new ValidationError({ salaryRecordId: 'Choose an existing salary month for this income.' });
       const record = { id: this.makeId(), ...checked.value, source, salaryRecordId: salary.id, createdAt: timestamp, updatedAt: timestamp };
       collections.extraIncome.add(record);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'extra_income:create',
+        entityType: 'extra_income',
+        entityId: record.id,
+        payload: { extraIncome: record },
+        createdAt: timestamp
+      });
       return record;
     });
   }
@@ -1157,7 +1350,7 @@ export class FinancialLedgerRepository {
     const checked = validateSavingInput(input, this.now());
     if (!checked.ok) throw new ValidationError(checked.errors, 'These extra income details are not valid.');
     const timestamp = this.now().toISOString();
-    return this.#transaction(['salaries', 'extraIncome', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(this.#storesWithOutbox(['salaries', 'extraIncome', 'savings']), 'readwrite', ({ collections, snapshots }) => {
       const existing = snapshots.extraIncome.find(item => item.id === id);
       if (!existing) throw new NotFoundError(id);
       if (existing.reversedAt) throw new AlreadyReversedError();
@@ -1172,18 +1365,33 @@ export class FinancialLedgerRepository {
       const record = { ...existing, ...checked.value, source: ['freelancing', 'part-time', 'bonus', 'other'].includes(input.source) ? input.source : 'other', salaryRecordId: salary.id, id, createdAt: existing.createdAt, updatedAt: timestamp };
       delete record.allocationStatus;
       collections.extraIncome.put(record);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'extra_income:update',
+        entityType: 'extra_income',
+        entityId: record.id,
+        payload: { extraIncome: record, previousExtraIncome: existing },
+        createdAt: timestamp
+      });
       return record;
     });
   }
 
   deleteExtraIncome(id) {
-    return this.#transaction(['extraIncome', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    const timestamp = this.now().toISOString();
+    return this.#transaction(this.#storesWithOutbox(['extraIncome', 'savings']), 'readwrite', ({ collections, snapshots }) => {
       const record = snapshots.extraIncome.find(item => item.id === id);
       if (!record) throw new NotFoundError(id);
       if (record.reversedAt) throw new AlreadyReversedError();
       const allocated = snapshots.savings.some(entry => (entry.extraIncomeAllocations ?? []).some(item => item.extraIncomeRecordId === id && item.amountPaise > 0));
       if (allocated) throw new Error('This income has funded savings. Remove or edit those savings contributions before deleting it.');
       collections.extraIncome.delete(id);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'extra_income:delete',
+        entityType: 'extra_income',
+        entityId: id,
+        payload: { extraIncomeId: id, deletedExtraIncome: record },
+        createdAt: timestamp
+      });
       return record;
     });
   }
@@ -1191,7 +1399,7 @@ export class FinancialLedgerRepository {
   transferSalaryBalance(salaryId) {
     const now = this.now();
     const timestamp = now.toISOString();
-    return this.#transaction(['expenses', 'salaries', 'savings', 'extraIncome'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings', 'extraIncome']), 'readwrite', ({ collections, snapshots }) => {
       const salary = snapshots.salaries.find(record => record.id === salaryId);
       if (!salary) throw new NotFoundError(salaryId, 'That salary no longer exists.');
       const pool = computeSalaryPool(salary, snapshots.expenses, snapshots.savings, snapshots.extraIncome);
@@ -1216,6 +1424,13 @@ export class FinancialLedgerRepository {
         createdAt: timestamp, updatedAt: timestamp
       };
       collections.savings.add(record);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'savings:transfer_balance',
+        entityType: 'saving',
+        entityId: record.id,
+        payload: { saving: record, sourceSalaryId: salaryId },
+        createdAt: timestamp
+      });
       return record;
     });
   }
@@ -1223,7 +1438,7 @@ export class FinancialLedgerRepository {
   /** Mark income as reversed without deleting its dates, salary link or source. */
   reverseExtraIncome(id) {
     const timestamp = this.now().toISOString();
-    return this.#transaction(['expenses', 'salaries', 'extraIncome', 'savings'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'extraIncome', 'savings']), 'readwrite', ({ collections, snapshots }) => {
       const record = snapshots.extraIncome.find(item => item.id === id);
       if (!record) throw new NotFoundError(id, 'That extra income record no longer exists.');
       if (record.reversedAt) throw new AlreadyReversedError();
@@ -1241,6 +1456,18 @@ export class FinancialLedgerRepository {
       }
       const reversed = { ...record, reversedAt: timestamp, reversalId: this.makeId(), updatedAt: timestamp };
       collections.extraIncome.put(reversed);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'extra_income:reverse',
+        entityType: 'extra_income',
+        entityId: id,
+        payload: {
+          extraIncomeId: id,
+          reversedRecord: reversed,
+          reversalId: reversed.reversalId,
+          reversedAt: reversed.reversedAt
+        },
+        createdAt: timestamp
+      });
       return reversed;
     });
   }
@@ -1248,7 +1475,7 @@ export class FinancialLedgerRepository {
   /** Reverse a savings credit while preserving its exact source allocation. */
   reverseSaving(id) {
     const timestamp = this.now().toISOString();
-    return this.#transaction(['savings'], 'readwrite', ({ collections, snapshots }) => {
+    return this.#transaction(this.#storesWithOutbox(['savings']), 'readwrite', ({ collections, snapshots }) => {
       const record = snapshots.savings.find(item => item.id === id);
       if (!record) throw new NotFoundError(id, 'That savings entry no longer exists.');
       if (record.reversedAt) throw new AlreadyReversedError();
@@ -1261,25 +1488,241 @@ export class FinancialLedgerRepository {
       }
       const reversed = { ...record, reversedAt: timestamp, reversalId: this.makeId(), updatedAt: timestamp };
       collections.savings.put(reversed);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'savings:reverse',
+        entityType: 'saving',
+        entityId: id,
+        payload: {
+          savingId: id,
+          reversedRecord: reversed,
+          reversalId: reversed.reversalId,
+          reversedAt: reversed.reversedAt
+        },
+        createdAt: timestamp
+      });
       return reversed;
     });
   }
 
-  /** Erase all ledger records and migration metadata in one IndexedDB transaction. */
-  clearAllData() {
-    return this.#transaction(FINANCIAL_STORES, 'readwrite', ({ collections }) => {
-      for (const collection of Object.values(collections)) collection.clear();
-      return true;
+  createSalary(input) {
+    const checked = validateSalaryInput(input);
+    if (!checked.ok) throw new ValidationError(checked.errors, 'These salary details are not valid.');
+    const now = this.now();
+    return this.#transaction(this.#storesWithOutbox(['salaries']), 'readwrite', ({ collections, snapshots }) => {
+      const existing = snapshots.salaries.find(record => record.monthKey === checked.value.monthKey);
+      if (existing) throw new DuplicateMonthError(checked.value.monthKey);
+
+      const latestCreatedAt = snapshots.salaries.reduce((latest, record) => {
+        const value = Date.parse(record.createdAt ?? '');
+        return Number.isFinite(value) ? Math.max(latest, value) : latest;
+      }, -Infinity);
+      const timestamp = new Date(Math.max(now.getTime(), Number.isFinite(latestCreatedAt) ? latestCreatedAt + 1 : now.getTime())).toISOString();
+      const record = {
+        id: this.makeId(),
+        ...checked.value,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+
+      try {
+        collections.salaries.put(record);
+      } catch (error) {
+        if (isConstraintError(error)) throw new DuplicateMonthError(record.monthKey);
+        throw error;
+      }
+
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'salary:create',
+        entityType: 'salary',
+        entityId: record.id,
+        payload: { salary: record },
+        createdAt: timestamp
+      });
+      return record;
+    });
+  }
+
+  updateSalary(id, input) {
+    const checked = validateSalaryInput(input);
+    if (!checked.ok) throw new ValidationError(checked.errors, 'These salary details are not valid.');
+    const timestamp = this.now().toISOString();
+    return this.#transaction(this.#storesWithOutbox(['salaries']), 'readwrite', ({ collections, snapshots }) => {
+      const existing = snapshots.salaries.find(record => record.id === id);
+      if (!existing) throw new NotFoundError(id, 'That salary record no longer exists.');
+
+      if (checked.value.monthKey !== existing.monthKey) {
+        const clash = snapshots.salaries.find(record => record.monthKey === checked.value.monthKey && record.id !== id);
+        if (clash) throw new DuplicateMonthError(checked.value.monthKey);
+      }
+
+      const record = {
+        ...existing,
+        ...checked.value,
+        id: existing.id,
+        createdAt: existing.createdAt,
+        updatedAt: timestamp
+      };
+
+      try {
+        collections.salaries.put(record);
+      } catch (error) {
+        if (isConstraintError(error)) throw new DuplicateMonthError(record.monthKey);
+        throw error;
+      }
+
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'salary:update',
+        entityType: 'salary',
+        entityId: record.id,
+        payload: { salary: record, previousSalary: existing },
+        createdAt: timestamp
+      });
+      return record;
     });
   }
 
   deleteSalaryIfUnused(id) {
-    return this.#transaction(['expenses', 'salaries', 'savings', 'extraIncome'], 'readwrite', ({ collections, snapshots }) => {
+    const timestamp = this.now().toISOString();
+    return this.#transaction(this.#storesWithOutbox(['expenses', 'salaries', 'savings', 'extraIncome']), 'readwrite', ({ collections, snapshots }) => {
+      const salary = snapshots.salaries.find(record => record.id === id);
+      if (!salary) throw new NotFoundError(id, 'That salary record no longer exists.');
       const used = snapshots.expenses.some(record => record.salaryRecordId === id) ||
         snapshots.savings.some(record => record.salaryRecordId === id) ||
         snapshots.extraIncome.some(record => record.salaryRecordId === id);
       if (used) throw new ReferencedSalaryError();
       collections.salaries.delete(id);
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'salary:delete',
+        entityType: 'salary',
+        entityId: id,
+        payload: { salaryId: id, deletedSalary: salary },
+        createdAt: timestamp
+      });
+      return salary;
+    });
+  }
+
+  restoreSalary(raw) {
+    const checked = normalizeSalaryRecord(raw, { now: this.now, makeId: this.makeId });
+    if (!checked.ok) throw new ValidationError(checked.errors, 'That salary record could not be restored.');
+    const record = checked.value;
+    const timestamp = this.now().toISOString();
+    return this.#transaction(this.#storesWithOutbox(['salaries']), 'readwrite', ({ collections, snapshots }) => {
+      if (snapshots.salaries.some(item => item.id === record.id)) return record;
+      const clash = snapshots.salaries.find(item => item.monthKey === record.monthKey && item.id !== record.id);
+      if (clash) throw new DuplicateMonthError(record.monthKey);
+
+      try {
+        collections.salaries.put(record);
+      } catch (error) {
+        if (isConstraintError(error)) throw new DuplicateMonthError(record.monthKey);
+        throw error;
+      }
+
+      this.#enqueueOperation(collections, snapshots, {
+        operationType: 'salary:restore',
+        entityType: 'salary',
+        entityId: record.id,
+        payload: { salary: record },
+        createdAt: timestamp
+      });
+      return record;
+    });
+  }
+
+  /** Erase all ledger records and migration metadata in one IndexedDB transaction. */
+  clearAllData() {
+    const stores = ['expenses', 'salaries', 'savings', 'meta', 'extraIncome'];
+    if (this.db.objectStoreNames.contains('outbox')) stores.push('outbox');
+    return this.#transaction(stores, 'readwrite', ({ collections }) => {
+      for (const collection of Object.values(collections)) collection.clear();
+      return true;
+    });
+  }
+
+  listPendingOperations() {
+    if (!this.db.objectStoreNames.contains('outbox')) return Promise.resolve([]);
+    return this.#transaction(['outbox'], 'readonly', ({ snapshots }) => {
+      return (snapshots.outbox || [])
+        .filter(record => record.status === OUTBOX_STATUS.PENDING)
+        .sort((a, b) => a.sequence - b.sequence);
+    });
+  }
+
+  listAllOperations() {
+    if (!this.db.objectStoreNames.contains('outbox')) return Promise.resolve([]);
+    return this.#transaction(['outbox'], 'readonly', ({ snapshots }) => {
+      return (snapshots.outbox || []).sort((a, b) => a.sequence - b.sequence);
+    });
+  }
+
+  getOperation(operationId) {
+    if (!this.db.objectStoreNames.contains('outbox')) return Promise.resolve(null);
+    return this.#transaction(['outbox'], 'readonly', ({ snapshots }) => {
+      return snapshots.outbox?.find(op => op.operationId === operationId) ?? null;
+    });
+  }
+
+  countPendingOperations() {
+    if (!this.db.objectStoreNames.contains('outbox')) return Promise.resolve(0);
+    return this.#transaction(['outbox'], 'readonly', ({ snapshots }) => {
+      return (snapshots.outbox || []).filter(record => record.status === OUTBOX_STATUS.PENDING).length;
+    });
+  }
+
+  acknowledgeOperation(operationId, ackMetadata = {}) {
+    if (!this.db.objectStoreNames.contains('outbox')) return Promise.resolve();
+    return this.#transaction(['outbox'], 'readwrite', ({ collections, snapshots }) => {
+      const record = snapshots.outbox?.find(op => op.operationId === operationId);
+      if (!record || record.status === OUTBOX_STATUS.ACKNOWLEDGED) return record ?? null;
+      const updated = {
+        ...record,
+        status: OUTBOX_STATUS.ACKNOWLEDGED,
+        acknowledgedAt: ackMetadata.acknowledgedAt ?? this.now().toISOString(),
+        ...(ackMetadata.remoteId ? { remoteId: ackMetadata.remoteId } : {})
+      };
+      collections.outbox.put(updated);
+      return updated;
+    });
+  }
+
+  recordOperationAttempt(operationId, error = null, options = {}) {
+    if (!this.db.objectStoreNames.contains('outbox')) return Promise.resolve();
+    return this.#transaction(['outbox'], 'readwrite', ({ collections, snapshots }) => {
+      const record = snapshots.outbox?.find(op => op.operationId === operationId);
+      if (!record) return null;
+      const updated = {
+        ...record,
+        attemptCount: (record.attemptCount ?? 0) + 1,
+        lastAttemptAt: this.now().toISOString(),
+        lastError: error ? (typeof error === 'string' ? error : (error.message ?? String(error))) : null,
+        ...(options.status ? { status: options.status } : {})
+      };
+      collections.outbox.put(updated);
+      return updated;
+    });
+  }
+
+  getSyncMetadata() {
+    if (!this.db.objectStoreNames.contains('meta')) return Promise.resolve({});
+    return this.#transaction(['meta'], 'readonly', ({ snapshots }) => {
+      const map = {};
+      for (const item of snapshots.meta || []) {
+        if (typeof item.key === 'string' && item.key.startsWith('sync:')) {
+          map[item.key.slice(5)] = item.value;
+        }
+      }
+      return map;
+    });
+  }
+
+  setSyncMetadata(updates) {
+    if (!this.db.objectStoreNames.contains('meta')) return Promise.resolve({});
+    return this.#transaction(['meta'], 'readwrite', ({ collections }) => {
+      for (const [key, value] of Object.entries(updates)) {
+        collections.meta.put({ key: `sync:${key}`, value });
+      }
+      return updates;
     });
   }
 }

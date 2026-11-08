@@ -17,13 +17,14 @@
  * existing `expenses` store, so an upgrade cannot lose expense data.
  */
 
-import { DB_NAME, DB_VERSION } from './core.js';
+import { DB_NAME, DB_VERSION, OUTBOX_STORE } from './core.js';
 
 export const EXPENSES_STORE = 'expenses';
 export const META_STORE = 'meta';
 export const SALARIES_STORE = 'salaries';
 export const SAVINGS_STORE = 'savings';
 export const EXTRA_INCOME_STORE = 'extraIncome';
+export { OUTBOX_STORE };
 
 function requestToPromise(request) {
   return new Promise((resolve, reject) => {
@@ -71,6 +72,18 @@ function ensureExtraIncomeStore(db, transaction) {
     store.createIndex('by_createdAt', 'createdAt', { unique: false });
   } else store = transaction.objectStore(EXTRA_INCOME_STORE);
   if (store && !store.indexNames.contains('by_salaryRecordId')) store.createIndex('by_salaryRecordId', 'salaryRecordId', { unique: false });
+}
+
+function ensureOutboxStore(db) {
+  if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
+    const outbox = db.createObjectStore(OUTBOX_STORE, { keyPath: 'operationId' });
+    outbox.createIndex('by_status', 'status', { unique: false });
+    outbox.createIndex('by_sequence', 'sequence', { unique: true });
+    outbox.createIndex('by_createdAt', 'createdAt', { unique: false });
+    outbox.createIndex('by_ownerUserId', 'ownerUserId', { unique: false });
+    outbox.createIndex('by_entityType_entityId', ['entityType', 'entityId'], { unique: false });
+    outbox.createIndex('by_status_sequence', ['status', 'sequence'], { unique: false });
+  }
 }
 
 /** Return the isolated database name for a user account, or the default unowned name. */
@@ -124,6 +137,7 @@ export function openExpenseDB(nameOrFactory = DB_NAME, maybeFactory = globalThis
         // index then guarantees one savings withdrawal per linked expense.
         if (!savings.indexNames.contains('by_expenseId')) savings.createIndex('by_expenseId', 'expenseId', { unique: true });
         ensureExtraIncomeStore(db, transaction);
+        ensureOutboxStore(db);
       } catch (error) {
         // Abort the versionchange transaction so IndexedDB rolls back to the
         // previous schema instead of leaving a half-created database.
@@ -376,5 +390,68 @@ export class IndexedDBExpenseStore {
 
   close() {
     this.db.close();
+  }
+}
+
+
+export class IndexedDBOutboxStore extends IndexedDBCollection {
+  constructor(db) {
+    super(db, OUTBOX_STORE);
+  }
+
+  /** List operations with 'pending' status, sorted by sequence ascending. */
+  async listPending() {
+    const transaction = this.db.transaction(OUTBOX_STORE, 'readonly');
+    const index = transaction.objectStore(OUTBOX_STORE).index('by_status');
+    const records = await requestToPromise(index.getAll(IDBKeyRange.only('pending')));
+    return records.sort((a, b) => a.sequence - b.sequence);
+  }
+
+  /** List all operations ordered by sequence. */
+  async listAll() {
+    const transaction = this.db.transaction(OUTBOX_STORE, 'readonly');
+    const index = transaction.objectStore(OUTBOX_STORE).index('by_sequence');
+    return requestToPromise(index.getAll());
+  }
+
+  /** Count of pending operations. */
+  async countPending() {
+    const transaction = this.db.transaction(OUTBOX_STORE, 'readonly');
+    const index = transaction.objectStore(OUTBOX_STORE).index('by_status');
+    return requestToPromise(index.count(IDBKeyRange.only('pending')));
+  }
+
+  /** Idempotently acknowledge an operation. */
+  async acknowledge(operationId, ackMetadata = {}) {
+    return this.run([OUTBOX_STORE], 'readwrite', transaction => {
+      const store = transaction.objectStore(OUTBOX_STORE);
+      const req = store.get(operationId);
+      req.onsuccess = () => {
+        const record = req.result;
+        if (!record) return;
+        if (record.status === 'acknowledged') return;
+        record.status = 'acknowledged';
+        record.acknowledgedAt = ackMetadata.acknowledgedAt ?? new Date().toISOString();
+        if (ackMetadata.remoteId) record.remoteId = ackMetadata.remoteId;
+        store.put(record);
+      };
+    });
+  }
+
+  /** Record a sync attempt and optional error. */
+  async recordAttempt(operationId, error = null, options = {}) {
+    return this.run([OUTBOX_STORE], 'readwrite', transaction => {
+      const store = transaction.objectStore(OUTBOX_STORE);
+      const req = store.get(operationId);
+      req.onsuccess = () => {
+        const record = req.result;
+        if (!record) return;
+        record.attemptCount = (record.attemptCount ?? 0) + 1;
+        record.lastAttemptAt = new Date().toISOString();
+        record.lastError = error ? (typeof error === 'string' ? error : (error.message ?? String(error))) : null;
+        if (options.status) record.status = options.status;
+        store.put(record);
+      };
+    });
   }
 }

@@ -156,9 +156,10 @@ async function dbSnapshot(page, targetName = null) {
     const savings = stores.includes('savings') ? await readAll('savings') : [];
     const extraIncome = stores.includes('extraIncome') ? await readAll('extraIncome') : [];
     const meta = stores.includes('meta') ? await readAll('meta') : [];
+    const outbox = stores.includes('outbox') ? await readAll('outbox') : [];
     const version = db.version;
     db.close();
-    return { records, salaries, savings, extraIncome, meta, stores, version };
+    return { records, salaries, savings, extraIncome, meta, outbox, stores, version };
   }, targetName);
 }
 
@@ -1806,7 +1807,7 @@ await run('v5 extra income upgrades safely and can be assigned independently of 
   await page.locator('[data-view="salary"]').click();
 
   let snapshot = await dbSnapshot(page);
-  assert.equal(snapshot.version, 6);
+  assert.equal(snapshot.version, 7);
   assert.equal(snapshot.extraIncome.length, 1);
   assert.equal(snapshot.extraIncome[0].id, legacyIncome.id);
   assert.equal(snapshot.extraIncome[0].date, receivedDate);
@@ -2649,6 +2650,82 @@ await run('Google account maintains strict isolation against email accounts and 
   const legacySnapshot = await dbSnapshot(page, 'spendly');
   assert.equal(legacySnapshot.records.length, 1);
   assert.equal(legacySnapshot.records[0].id, 'unowned-legacy-oauth');
+
+  await context.close();
+});
+
+/* -------------------------------------------------------------------------- */
+/* 8. Phase 5: Account-Scoped Outbox & Offline Mutation Persistence           */
+/* -------------------------------------------------------------------------- */
+
+await run('financial mutations create atomic outbox operations with monotonic sequence and reload persistence', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+  await gotoApp(page);
+
+  // Add salary
+  await addSalary(page, { amount: '65000', notes: 'Phase 5 salary' });
+
+  // Add an expense funded by salary
+  await addExpense(page, { amount: '2500', description: 'Outbox Test Expense' });
+  await waitForToast(page, 'Expense added successfully');
+
+  // Add savings contribution
+  await addSaving(page, { amount: '10000', description: 'Phase 5 savings' });
+
+  // Add savings-funded expense (composite action)
+  await addExpense(page, { amount: '3000', description: 'Savings-funded camera', source: 'savings' });
+  await waitForToast(page, 'Expense added using Savings');
+
+  // Check database snapshot
+  const snapshot = await dbSnapshot(page);
+  assert.equal(snapshot.version, 7, 'database version must be 7');
+  assert.ok(snapshot.stores.includes('outbox'), 'outbox store must exist');
+
+  // Verify outbox records
+  const outbox = snapshot.outbox.slice().sort((a, b) => a.sequence - b.sequence);
+  assert.equal(outbox.length, 4, 'expected exactly 4 outbox operations (salary, expense, savings, savings-funded expense)');
+
+  // Verify operations:
+  // 1: salary:create
+  assert.equal(outbox[0].operationType, 'salary:create');
+  assert.equal(outbox[0].ownerUserId, MOCK_AUTH_USER.id);
+  assert.equal(outbox[0].sequence, 1);
+  assert.equal(outbox[0].status, 'pending');
+
+  // 2: expense:create
+  assert.equal(outbox[1].operationType, 'expense:create');
+  assert.equal(outbox[1].sequence, 2);
+  assert.equal(outbox[1].status, 'pending');
+
+  // 3: savings:contribution
+  assert.equal(outbox[2].operationType, 'savings:contribution');
+  assert.equal(outbox[2].sequence, 3);
+  assert.equal(outbox[2].status, 'pending');
+
+  // 4: composite savings-funded expense: single outbox operation with embedded withdrawal
+  assert.equal(outbox[3].operationType, 'expense:create');
+  assert.equal(outbox[3].sequence, 4);
+  assert.equal(outbox[3].status, 'pending');
+  assert.ok(outbox[3].payload.linkedWithdrawal, 'linked withdrawal must be present in payload');
+  assert.equal(outbox[3].payload.linkedWithdrawal.amount, 3000);
+
+  // Verify reload persistence
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  const reloadSnapshot = await dbSnapshot(page);
+  assert.equal(reloadSnapshot.outbox.length, 4, 'pending outbox operations survive page reload');
+
+  // Sign out and verify outbox records persist on disk in user database
+  await page.locator('#headerSignOutButton').click();
+  await page.locator('#authView').waitFor({ state: 'visible' });
+
+  // Read the user database directly using customName
+  const userDbName = `spendly_user_${MOCK_AUTH_USER.id}`;
+  const signedOutSnapshot = await dbSnapshot(page, userDbName);
+  assert.equal(signedOutSnapshot.outbox.length, 4, 'pending outbox operations persist in user IndexedDB after logout');
 
   await context.close();
 });
