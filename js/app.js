@@ -2697,6 +2697,10 @@ async function registerServiceWorker() {
 function showUpdateIfWaiting(registration) {
   if (registration.waiting && navigator.serviceWorker.controller) {
     state.registration = registration;
+    if (!state.user) {
+      applyUpdate();
+      return;
+    }
     $('updateBanner').hidden = false;
   }
 }

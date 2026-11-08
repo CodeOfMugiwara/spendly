@@ -35,12 +35,30 @@ function emitPwaFiles() {
   };
 }
 
+/** Ensure Vite dev server always returns raw text/css for direct stylesheet requests. */
+function devCssMiddleware() {
+  return {
+    name: 'spendly-dev-css',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url && (req.url.endsWith('.css') || req.url.includes('.css?'))) {
+          const accept = req.headers['accept'] || '';
+          if (!accept.includes('application/javascript') && !accept.includes('text/javascript')) {
+            req.headers['accept'] = 'text/css,*/*;q=0.1';
+          }
+        }
+        next();
+      });
+    }
+  };
+}
+
 export default defineConfig({
   // Keep the existing source tree and relative app paths; the build plugin
   // emits files that need stable names for the PWA shell.
   base: './',
   publicDir: false,
-  plugins: [emitPwaFiles()],
+  plugins: [emitPwaFiles(), devCssMiddleware()],
   build: {
     rollupOptions: {
       output: {

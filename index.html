@@ -14,7 +14,42 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png">
   <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
-  <link rel="stylesheet" href="./css/app.css">
+  <link rel="stylesheet" href="./css/app.css" id="mainStylesheet">
+  <script>
+    (function() {
+      var link = document.getElementById('mainStylesheet');
+      async function purgeAndRecover() {
+        if (window.__spendly_recovered) return;
+        window.__spendly_recovered = true;
+        try {
+          if ('caches' in window) {
+            var keys = await caches.keys();
+            await Promise.all(keys.map(function(k) { return caches.delete(k); }));
+          }
+          if ('serviceWorker' in navigator) {
+            var regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(function(r) { return r.unregister(); }));
+          }
+        } catch (e) {}
+        window.location.reload();
+      }
+      if (link) {
+        link.addEventListener('error', purgeAndRecover);
+      }
+      window.addEventListener('DOMContentLoaded', function() {
+        var sheet = link ? link.sheet : null;
+        var hasRules = false;
+        try {
+          hasRules = Boolean(sheet && sheet.cssRules && sheet.cssRules.length > 0);
+        } catch (e) {
+          hasRules = false;
+        }
+        if (!hasRules && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+          purgeAndRecover();
+        }
+      });
+    })();
+  </script>
   <title>Spendly — Salary, Spending &amp; Savings</title>
 </head>
 <body>

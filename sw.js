@@ -5,14 +5,14 @@
  *  - precache the complete app shell on install (HTML, CSS, JS, manifest, icons);
  *  - serve navigations from that shell cache so the app opens instantly offline
  *    and the HTML always matches the cached JS/CSS generation;
- *  - cache-first for local static assets, with a network fallback for anything
- *    that is not in the precache yet;
- *  - only activate a new worker when the page asks, then remove old caches.
+ *  - on localhost, prefer live network with cache fallback so dev edits apply
+ *    immediately while keeping offline support fully functional;
+ *  - cache-first for local static assets in production, with a network fallback.
  *
  * The worker never opens IndexedDB. Updating the app cannot touch expenses.
  */
 
-const CACHE_VERSION = 'v24';
+const CACHE_VERSION = 'v27';
 const CACHE_PREFIX = 'spendly-';
 const CACHE_NAME = `${CACHE_PREFIX}shell-${CACHE_VERSION}`;
 
@@ -47,9 +47,8 @@ self.addEventListener('install', event => {
         headers: path.endsWith('.css') ? { 'Accept': 'text/css,*/*;q=0.1' } : undefined
       }
     )));
-    // A first install activates automatically. An update waits for the page to
-    // offer "Refresh", so a form in progress is never interrupted.
   })());
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {
@@ -96,6 +95,23 @@ self.addEventListener('fetch', event => {
 
 async function handleNavigation(request) {
   const cache = await caches.open(CACHE_NAME);
+
+  // On local development, always fetch live HTML first so changes are immediately seen,
+  // falling back to cache when offline.
+  if (self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1') {
+    try {
+      const response = await fetch(request);
+      if (response.ok && response.type === 'basic') {
+        await cache.put(INDEX_URL, response.clone());
+      }
+      return response;
+    } catch {
+      const shell = await cache.match(INDEX_URL);
+      if (shell) return shell;
+      return offlineFallback();
+    }
+  }
+
   const shell = await cache.match(INDEX_URL);
   if (shell) return shell;
 
@@ -113,11 +129,27 @@ async function handleNavigation(request) {
 async function cacheFirst(request) {
   const cache = await caches.open(CACHE_NAME);
   const url = new URL(request.url);
-  // Vite's dev and preview servers send `Vary: Origin` for static files.
-  // Those same-origin app assets do not vary by requesting origin, so ignore
-  // that header when matching files while retaining normal Vary semantics for
-  // extensionless requests such as future API endpoints.
   const isStaticAsset = /\.[a-z0-9]+$/i.test(url.pathname);
+
+  // On local development, fetch live asset from dev server first so code/style changes
+  // are immediately picked up without stale cache locks, falling back to cache when offline.
+  if (self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1') {
+    try {
+      const response = await fetch(request);
+      if (response.ok && response.status === 200 && response.type === 'basic') {
+        const isCss = url.pathname.endsWith('.css');
+        const contentType = response.headers.get('content-type') || '';
+        if (!isCss || contentType.includes('text/css')) {
+          await cache.put(request, response.clone());
+        }
+      }
+      return response;
+    } catch {
+      const cached = await cache.match(request, { ignoreVary: isStaticAsset });
+      if (cached) return cached;
+    }
+  }
+
   const cached = await cache.match(request, { ignoreVary: isStaticAsset });
   if (cached) {
     const isCss = url.pathname.endsWith('.css');
