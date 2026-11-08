@@ -60,6 +60,8 @@ import {
   signInUser,
   signUpUser,
   signOutUser,
+  signInWithGoogle,
+  parseOAuthErrorFromUrl,
   requestPasswordReset,
   updateUserPassword,
   resendVerification,
@@ -203,6 +205,20 @@ async function initApp() {
     return;
   }
 
+  const oauthError = parseOAuthErrorFromUrl(window.location.href);
+  if (oauthError) {
+    showAuthScreen('login');
+    const errEl = $('loginError');
+    if (errEl) {
+      errEl.textContent = oauthError;
+      errEl.hidden = false;
+    }
+    try {
+      window.history.replaceState({ spendly: true }, '', window.location.pathname);
+    } catch {}
+    return;
+  }
+
   const hash = window.location.hash || '';
   const isRecoveryInUrl = hash.includes('type=recovery');
 
@@ -235,6 +251,11 @@ async function initApp() {
     }
 
     if (session?.user) {
+      if (window.location.hash.includes('access_token=') || window.location.search.includes('code=')) {
+        try {
+          window.history.replaceState({ spendly: true }, '', window.location.pathname);
+        } catch {}
+      }
       if (isRecoveryInUrl) {
         state.user = session.user;
         showAuthScreen('reset');
@@ -3130,6 +3151,60 @@ function bindAuthEvents() {
   $('settingsSignOutButton')?.addEventListener('click', () => {
     closeDialog($('dataSettingsSheet'));
     void doSignOut();
+  });
+
+  // Google OAuth actions
+  const handleGoogleAuth = async (sourceButtonId, errorId) => {
+    const btn = $(sourceButtonId);
+    const errorEl = $(errorId);
+    if (errorEl) {
+      errorEl.hidden = true;
+      errorEl.textContent = '';
+    }
+
+    if (!navigator.onLine) {
+      if (errorEl) {
+        errorEl.textContent = 'You are offline. An internet connection is required to sign in with Google.';
+        errorEl.hidden = false;
+      }
+      return;
+    }
+
+    const allGoogleBtns = [$('googleLoginButton'), $('googleRegisterButton')].filter(Boolean);
+    for (const b of allGoogleBtns) {
+      b.disabled = true;
+      b.setAttribute('aria-busy', 'true');
+    }
+    const origSpan = btn?.querySelector('span');
+    const origText = origSpan ? origSpan.textContent : '';
+    if (origSpan) {
+      origSpan.textContent = 'Connecting to Google…';
+    }
+
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      console.error('Google OAuth initiation failed:', err);
+      if (errorEl) {
+        errorEl.textContent = formatAuthError(err);
+        errorEl.hidden = false;
+      }
+      for (const b of allGoogleBtns) {
+        b.disabled = false;
+        b.removeAttribute('aria-busy');
+      }
+      if (origSpan) {
+        origSpan.textContent = origText;
+      }
+    }
+  };
+
+  $('googleLoginButton')?.addEventListener('click', () => {
+    void handleGoogleAuth('googleLoginButton', 'loginError');
+  });
+
+  $('googleRegisterButton')?.addEventListener('click', () => {
+    void handleGoogleAuth('googleRegisterButton', 'registerError');
   });
 
   // Login form

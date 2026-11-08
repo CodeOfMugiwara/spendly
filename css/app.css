@@ -3830,3 +3830,75 @@ svg {
   margin-top: 4px;
   word-break: break-all;
 }
+
+
+/* ==========================================================================
+   Google OAuth Authentication & Social Buttons
+   ========================================================================== */
+
+.button--social {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  font-weight: 600;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+
+.button--social:hover {
+  background: var(--surface-soft);
+  border-color: var(--forest);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.07);
+}
+
+.button--social:active {
+  transform: scale(0.99);
+}
+
+.button--social[disabled] {
+  opacity: 0.65;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.button--social .icon--google {
+  width: 18px;
+  height: 18px;
+  stroke: none !important;
+  fill: none;
+  flex-shrink: 0;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: 18px 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--line);
+}
+
+.auth-divider::before {
+  margin-right: 12px;
+}
+
+.auth-divider::after {
+  margin-left: 12px;
+}

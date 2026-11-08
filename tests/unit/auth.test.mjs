@@ -9,6 +9,8 @@ import {
   signUpUser,
   signInUser,
   signOutUser,
+  signInWithGoogle,
+  parseOAuthErrorFromUrl,
   requestPasswordReset,
   updateUserPassword,
   resendVerification
@@ -147,4 +149,72 @@ test('signUpUser, signInUser, signOutUser, reset and resend invoke Supabase auth
   await resendVerification('new@example.com');
   assert.equal(calls[5].method, 'resend');
   assert.equal(calls[5].args.email, 'new@example.com');
+});
+
+test('signInWithGoogle initiates OAuth with provider google and redirect options', async () => {
+  let oauthArgs = null;
+  const mockClient = {
+    auth: {
+      signInWithOAuth: async (args) => {
+        oauthArgs = args;
+        return { data: { provider: 'google', url: 'https://accounts.google.com/o/oauth2/v2/auth?...' }, error: null };
+      }
+    }
+  };
+
+  setSupabaseClient(mockClient);
+
+  const res = await signInWithGoogle({
+    redirectTo: 'http://127.0.0.1:5173/',
+    skipBrowserRedirect: true
+  });
+
+  assert.equal(oauthArgs.provider, 'google');
+  assert.equal(oauthArgs.options.redirectTo, 'http://127.0.0.1:5173/');
+  assert.equal(oauthArgs.options.queryParams.prompt, 'select_account');
+  assert.equal(oauthArgs.options.skipBrowserRedirect, true);
+  assert.match(res.url, /accounts\.google\.com/);
+});
+
+test('parseOAuthErrorFromUrl parses error parameters from hash and query string', () => {
+  assert.equal(
+    parseOAuthErrorFromUrl('http://127.0.0.1:5173/#error=access_denied&error_code=403&error_description=User+cancelled'),
+    'Google sign-in was cancelled.'
+  );
+
+  assert.equal(
+    parseOAuthErrorFromUrl('http://127.0.0.1:5173/?error=access_denied&error_description=User+denied'),
+    'Google sign-in was cancelled.'
+  );
+
+  assert.match(
+    parseOAuthErrorFromUrl('http://127.0.0.1:5173/#error=provider_disabled&error_description=Unsupported+provider'),
+    /Google sign-in is not configured yet/i
+  );
+
+  assert.equal(
+    parseOAuthErrorFromUrl('http://127.0.0.1:5173/#error=server_error&error_description=OAuth+token+exchange+failed'),
+    'OAuth token exchange failed'
+  );
+
+  // Clean URLs or standard auth hash return null
+  assert.equal(parseOAuthErrorFromUrl('http://127.0.0.1:5173/'), null);
+  assert.equal(parseOAuthErrorFromUrl('http://127.0.0.1:5173/#access_token=jwt&refresh_token=rt'), null);
+  assert.equal(parseOAuthErrorFromUrl(''), null);
+  assert.equal(parseOAuthErrorFromUrl(null), null);
+});
+
+test('formatAuthError handles Google OAuth error cases', () => {
+  assert.equal(
+    formatAuthError(new Error('access_denied')),
+    'Google sign-in was cancelled.'
+  );
+  assert.equal(
+    formatAuthError(new Error('User cancelled sign-in flow')),
+    'Google sign-in was cancelled.'
+  );
+  assert.match(
+    formatAuthError(new Error('provider_disabled')),
+    /Google sign-in is not enabled/i
+  );
 });

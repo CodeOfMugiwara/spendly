@@ -2404,6 +2404,256 @@ await run('offline authentication reopens cached session without network calls a
 });
 
 /* -------------------------------------------------------------------------- */
+/* 8. Phase 4: Google OAuth Authentication                                    */
+/* -------------------------------------------------------------------------- */
+
+await run('Google OAuth buttons display properly on login and register screens and handle initiation', async () => {
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.locator('#authView').waitFor({ state: 'visible' });
+
+  // Check login card Google button
+  const googleLoginBtn = page.locator('#googleLoginButton');
+  assert.equal(await googleLoginBtn.isVisible(), true);
+  assert.match(await googleLoginBtn.innerText(), /Continue with Google/i);
+  assert.equal(await googleLoginBtn.locator('svg').count(), 1);
+
+  // Navigate to register card
+  await page.locator('#toRegister').click();
+  const googleRegBtn = page.locator('#googleRegisterButton');
+  assert.equal(await googleRegBtn.isVisible(), true);
+  assert.match(await googleRegBtn.innerText(), /Continue with Google/i);
+
+  // Switch back to login
+  await page.locator('#toLoginFromRegister').click();
+
+  // Test OAuth initiation on Google button
+  let authorizeRequested = false;
+  let providerParam = '';
+  await page.route('**/auth/v1/authorize*', async route => {
+    authorizeRequested = true;
+    const url = new URL(route.request().url());
+    providerParam = url.searchParams.get('provider');
+    await route.abort('blockedbyclient');
+  });
+
+  await googleLoginBtn.click();
+  await page.waitForTimeout(100);
+  assert.equal(authorizeRequested, true, 'Google OAuth authorize endpoint must be requested');
+  assert.equal(providerParam, 'google', 'Provider must be google');
+
+  await context.close();
+});
+
+await run('Google OAuth cancellation and callback errors display friendly messages and clean URL', async () => {
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  // Scenario 1: User cancelled / denied consent
+  await page.goto(`${base}/#error=access_denied&error_code=403&error_description=User+cancelled`, { waitUntil: 'networkidle' });
+  await page.locator('#authView').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#authLoginCard').isVisible(), true);
+  await page.locator('#loginError').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#loginError').innerText(), 'Google sign-in was cancelled.');
+
+  // Verify URL was cleaned of error parameters
+  const currentUrl = page.url();
+  assert.equal(currentUrl.includes('error='), false, 'URL must be sanitized after displaying OAuth error');
+
+  // Scenario 2: Provider disabled error in query params
+  await page.goto(`${base}/?error=provider_disabled&error_description=Unsupported+provider`, { waitUntil: 'networkidle' });
+  await page.locator('#loginError').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#loginError').innerText(), /Google sign-in is not configured yet/i);
+
+  await context.close();
+});
+
+await run('Google authenticated session restores, mounts isolated IndexedDB and survives sign-out', async () => {
+  const googleUser = {
+    id: '33333333-3333-4000-8000-333333333333',
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'alex.google@example.com',
+    app_metadata: { provider: 'google' },
+    user_metadata: { full_name: 'Alex Google' }
+  };
+
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  // Simulate returning from Google redirect with session tokens in localStorage
+  await page.goto(`${base}/__blank__`, { waitUntil: 'load' });
+  await page.evaluate(session => {
+    localStorage.setItem('spendly.auth.token', JSON.stringify(session));
+  }, { ...MOCK_AUTH_SESSION, user: googleUser });
+
+  await gotoApp(page);
+
+  // Header chip displays Google user info
+  assert.equal(await page.locator('#userEmailLabel').innerText(), 'alex.google@example.com');
+  assert.equal(await page.locator('#userAvatar').innerText(), 'A');
+
+  // Verify isolated DB name
+  const dbName = await page.evaluate(() => document.documentElement.dataset.activeDb);
+  assert.equal(dbName, 'spendly_user_33333333-3333-4000-8000-333333333333');
+
+  // Add financial records as Google user
+  await addSalary(page, { amount: '75000' });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '1500', description: 'Google Pixel Case' });
+  await waitForToast(page, 'Expense added successfully');
+
+  const snapshot = await dbSnapshot(page);
+  assert.equal(snapshot.records.length, 1);
+  assert.equal(snapshot.records[0].description, 'Google Pixel Case');
+
+  // Google user signs out
+  await page.locator('#headerSignOutButton').click();
+  await page.locator('#authView').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#authLoginCard').isVisible(), true);
+  assert.equal(await page.locator('#userChip').isVisible(), false);
+
+  // Re-login as Google user
+  await page.evaluate(session => {
+    localStorage.setItem('spendly.auth.token', JSON.stringify(session));
+  }, { ...MOCK_AUTH_SESSION, user: googleUser });
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+
+  assert.equal(await page.locator('#userEmailLabel').innerText(), 'alex.google@example.com');
+  const restored = await dbSnapshot(page);
+  assert.equal(restored.records.length, 1);
+  assert.equal(restored.records[0].description, 'Google Pixel Case');
+  assert.equal(restored.salaries.length, 1);
+
+  await context.close();
+});
+
+await run('Google account maintains strict isolation against email accounts and legacy unowned data', async () => {
+  const googleUser = {
+    id: '33333333-3333-4000-8000-333333333333',
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'alex.google@example.com'
+  };
+  const emailUser = {
+    id: '44444444-4444-4000-8000-444444444444',
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'emily.email@spendly.local'
+  };
+
+  const context = await createContext({ auth: false });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  // Seed legacy unowned 'spendly' DB
+  await page.goto(`${base}/__blank__`, { waitUntil: 'load' });
+  await page.evaluate(async () => {
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.open('spendly', 6);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('expenses')) {
+          db.createObjectStore('expenses', { keyPath: 'id' });
+        }
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction('expenses', 'readwrite');
+        tx.objectStore('expenses').put({
+          id: 'unowned-legacy-oauth',
+          amount: 888,
+          description: 'Unowned Legacy Record',
+          date: '2026-11-01',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => reject(tx.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  });
+
+  // Step 1: Login as Google User and seed a record
+  await page.evaluate(session => {
+    localStorage.setItem('spendly.auth.token', JSON.stringify(session));
+  }, { ...MOCK_AUTH_SESSION, user: googleUser });
+
+  await gotoApp(page);
+  assert.equal(await page.locator('#userEmailLabel').innerText(), 'alex.google@example.com');
+  let googleInitialSnapshot = await dbSnapshot(page);
+  assert.equal(googleInitialSnapshot.records.length, 0, 'Google user starts clean');
+
+  await addSalary(page, { amount: '60000' });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '1200', description: 'Google Pixel Buds' });
+  await waitForToast(page, 'Expense added successfully');
+
+  // Step 2: Sign out Google User
+  await page.locator('#headerSignOutButton').click();
+  await page.locator('#authView').waitFor({ state: 'visible' });
+
+  // Step 3: Login as Email User
+  await page.evaluate(session => {
+    localStorage.setItem('spendly.auth.token', JSON.stringify(session));
+  }, { ...MOCK_AUTH_SESSION, user: emailUser });
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+  assert.equal(await page.locator('#userEmailLabel').innerText(), 'emily.email@spendly.local');
+  // Email user has clean empty state (does NOT see Google data or unowned legacy data)
+  let emailSnapshot = await dbSnapshot(page);
+  assert.equal(emailSnapshot.records.length, 0, 'Email user sees 0 records');
+
+  // Email user adds an expense
+  await addSalary(page, { amount: '40000' });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '700', description: 'Emily Books' });
+  await waitForToast(page, 'Expense added successfully');
+
+  // Step 4: Sign out Email User
+  await page.locator('#headerSignOutButton').click();
+  await page.locator('#authView').waitFor({ state: 'visible' });
+
+  // Step 5: Login back as Google User
+  await page.evaluate(session => {
+    localStorage.setItem('spendly.auth.token', JSON.stringify(session));
+  }, { ...MOCK_AUTH_SESSION, user: googleUser });
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.appReady === 'true');
+
+  assert.equal(await page.locator('#userEmailLabel').innerText(), 'alex.google@example.com');
+  // Google user sees their own records, NOT Emily's books, NOT unowned record
+  const googleSnapshot = await dbSnapshot(page);
+  assert.ok(googleSnapshot.records.some(r => r.description === 'Google Pixel Buds'), 'Google user sees their own records');
+  assert.equal(googleSnapshot.records.some(r => r.description === 'Emily Books'), false, 'Google user must not see Email user data');
+  assert.equal(googleSnapshot.records.some(r => r.description === 'Unowned Legacy Record'), false, 'Google user must not see unowned data');
+
+  // Verify 'spendly' unowned database remains untouched
+  const legacySnapshot = await dbSnapshot(page, 'spendly');
+  assert.equal(legacySnapshot.records.length, 1);
+  assert.equal(legacySnapshot.records[0].id, 'unowned-legacy-oauth');
+
+  await context.close();
+});
+
+/* -------------------------------------------------------------------------- */
 /* Results                                                                    */
 /* -------------------------------------------------------------------------- */
 

@@ -105,6 +105,30 @@ export async function signInUser({ email, password }) {
 }
 
 /**
+ * Sign in or register with Google OAuth.
+ */
+export async function signInWithGoogle(options = {}) {
+  const supabase = getSupabase();
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const redirectTo = options.redirectTo || origin;
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo,
+      queryParams: options.queryParams || {
+        access_type: 'offline',
+        prompt: 'select_account'
+      },
+      skipBrowserRedirect: options.skipBrowserRedirect || false
+    }
+  });
+
+  if (error) throw error;
+  return data;
+}
+
+/**
  * Sign out the currently active user and invalidate their session.
  */
 export async function signOutUser() {
@@ -162,12 +186,65 @@ export async function resendVerification(email) {
 }
 
 /**
+ * Format OAuth errors into clear, friendly messages for the user.
+ */
+function formatOAuthErrorMessage(error, description) {
+  const raw = `${error || ''} ${description || ''}`.trim();
+  if (/access_denied|user.*(cancelled|canceled)|consent_denied/i.test(raw)) {
+    return 'Google sign-in was cancelled.';
+  }
+  if (/provider_disabled|unsupported_provider/i.test(raw)) {
+    return 'Google sign-in is not configured yet. Please configure the Google provider in Supabase.';
+  }
+  return description || error || 'Google sign-in failed. Please try again.';
+}
+
+/**
+ * Parse OAuth errors from URL query parameters or hash fragments.
+ * Returns null if no error was present.
+ */
+export function parseOAuthErrorFromUrl(urlOrLocation = '') {
+  if (!urlOrLocation) return null;
+  const str = typeof urlOrLocation === 'string' ? urlOrLocation : String(urlOrLocation);
+
+  // Check query string
+  if (str.includes('?')) {
+    const queryPart = str.split('?')[1].split('#')[0];
+    const params = new URLSearchParams(queryPart);
+    const error = params.get('error') || params.get('error_code');
+    const description = params.get('error_description');
+    if (error || description) {
+      return formatOAuthErrorMessage(error, description);
+    }
+  }
+
+  // Check hash fragment
+  if (str.includes('#')) {
+    const hashPart = str.split('#')[1];
+    const params = new URLSearchParams(hashPart);
+    const error = params.get('error') || params.get('error_code');
+    const description = params.get('error_description');
+    if (error || description) {
+      return formatOAuthErrorMessage(error, description);
+    }
+  }
+
+  return null;
+}
+
+/**
  * Format auth errors into clear, friendly messages for the user.
  */
 export function formatAuthError(error) {
   if (!error) return '';
   const message = error.message || String(error);
 
+  if (/access_denied|user.*(cancelled|canceled)|consent_denied/i.test(message)) {
+    return 'Google sign-in was cancelled.';
+  }
+  if (/provider_disabled|unsupported_provider/i.test(message)) {
+    return 'Google sign-in is not enabled in Supabase project settings.';
+  }
   if (/invalid login credentials/i.test(message)) {
     return 'Incorrect email or password. Please check your credentials and try again.';
   }
