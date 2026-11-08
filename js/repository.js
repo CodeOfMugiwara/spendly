@@ -106,8 +106,7 @@ function isConstraintError(error) {
 }
 
 function defaultMakeId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  return `sp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return generateUUID();
 }
 
 function resolveStorage(storage) {

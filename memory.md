@@ -354,3 +354,59 @@ Verification: 59 unit tests and 24 browser scenarios pass, including the v5-to-v
 Income, Savings contributions and salary-balance transfers now expose a 10-second Undo toast action and a confirmed reversal action in history. Reversals preserve original ledger rows, timestamps, salary links and exact paise funding allocations with `reversedAt` and `reversalId` fields. Active allocations and later use are checked atomically; duplicate reversals are rejected. The Your data page can permanently erase all IndexedDB stores and the legacy localStorage copy after confirmation. IndexedDB remains v6, JSON backup v5 and service-worker shell cache v20.
 
 Verification: `npm test` passed 60/60. `npm run test:e2e` passed 25/25, including offline add/undo, refresh history undo, mixed salary/income source restoration, dependency and negative-balance guards, duplicate prevention, full erase confirmation, responsive checks and axe accessibility checks. Changes are not committed.
+
+---
+
+## 14. Phase 4 — 8 November 2026 — Supabase Authentication & Multi-Account Isolation
+
+**Scope:** Introduce Supabase authentication with email/password and strict local data partitioning.
+**Why:** Enable multi-user authentication without compromising the offline-first experience.
+- Implemented `spendly_user_${userId}` isolated IndexedDB partitions.
+- Offline auth token caching in `localStorage`.
+- Base Supabase schema with RLS and cross-row integrity triggers.
+- See `context/phases/phase-4-supabase-auth.md` for full details.
+
+## 15. Phase 4.1 — 8 November 2026 — Google OAuth Authentication
+
+**Scope:** Add Google OAuth sign-in/sign-up.
+**Why:** Provide friction-free login with clean URL fragment cleanup.
+- Implemented `signInWithGoogle()` and OAuth callback error parsing.
+- See `context/phases/phase-4-supabase-auth.md`.
+
+## 16. Incident — 8 November 2026 — Unstyled UI & Poisoned Service Worker Cache
+
+**Issue:** `http://127.0.0.1:5173/` rendered raw HTML with oversized SVGs.
+**Cause:** Vite dev server served JS HMR module for `.css` due to `Accept: */*` in service worker `cache.addAll()`. Chrome strictly blocked stylesheet due to MIME mismatch (`application/javascript`).
+**Resolution:** Multi-layer defense: Vite dev middleware rewriting `Accept: text/css`, `sw.js` live-first on localhost + MIME checks, `<head>` self-healing reload script in `index.html`.
+- See `context/incidents/incident-ui-ux-vite-mime-poisoning.md` for full post-mortem.
+
+## 17. Phase 5 — 8-9 November 2026 — Local-First Sync Foundation & Durable Outbox
+
+**Scope:** Account-scoped operation outbox in IndexedDB v7.
+**Why:** Ensure local financial changes cannot exist without an accompanying sync operation committed in the same IndexedDB transaction.
+- Upgraded `DB_VERSION` to 7 with new `outbox` store.
+- Enqueue all 19 mutation operations atomically in `FinancialLedgerRepository`.
+- Composite savings-funded expense + withdrawal single-operation pattern.
+- 90 unit tests (including 23 in `tests/unit/outbox.test.mjs`) and 38 browser scenarios pass. Commit `45a2938`.
+- See `context/phases/phase-5-sync-outbox.md`.
+
+## 18. Phase 5.2 — 9 November 2026 — Pre-Sync Readiness Audit
+
+**Scope:** Read-only audit before implementing server-side sync.
+- Verified clean git working tree and commit `45a2938`.
+- Identified `defaultMakeId()` fallback gap; scheduled unification with `generateUUID()`.
+- Identified required server-side idempotency table and atomic RPC functions.
+- See `context/phases/phase-5-readiness-audit.md`.
+
+## 19. Phase 6.1 — 9 November 2026 — Secure Server-Side Financial Operations & Sync Infrastructure
+
+**Scope:** PostgreSQL infrastructure for receiving and applying Spendly financial operations.
+**Why:** Provide durable server-side idempotency, atomic replay of composite transactions, and delta change tracking before implementing client-side network upload.
+- Unified `defaultMakeId()` with `generateUUID()` from `js/core.js` so all new client entities are strictly valid RFC 4122 v4 UUIDs.
+- Created migration `20261109011000_create_sync_operations_and_rpc.sql` applied to `spendly-dev`:
+  - `public.sync_operations` idempotency table with SHA-256 payload hashing and RLS.
+  - `public.sync_change_feed` with globally monotonic identity cursor.
+  - `public.apply_sync_operation(p_operation jsonb)` handling all 19 outbox types atomically with overdraft and allocation limits.
+  - `public.get_sync_changes(p_after_cursor, p_limit)` with deterministic cursor pagination and user isolation.
+- Verified via rollback-based suite `supabase/tests/sync_rpc_tests.sql` and `rls_security.sql`.
+- See `context/phases/phase-6-server-sync.md`.
