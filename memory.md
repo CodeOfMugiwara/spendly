@@ -410,3 +410,15 @@ Verification: `npm test` passed 60/60. `npm run test:e2e` passed 25/25, includin
   - `public.get_sync_changes(p_after_cursor, p_limit)` with deterministic cursor pagination and user isolation.
 - Verified via rollback-based suite `supabase/tests/sync_rpc_tests.sql` and `rls_security.sql`.
 - See `context/phases/phase-6-server-sync.md`.
+
+## 20. Phase 6.1.1 — 9 November 2026 — Transaction-Safe Change Feed Cursors
+
+**Scope:** Replace sequence-based identity cursors with account-scoped, row-locked transactional cursor counters.
+**Why:** PostgreSQL sequences allocate values before commit, allowing uncommitted transactions with lower cursors to be skipped by concurrent clients when higher-numbered transactions commit first.
+- Created `public.sync_user_cursors` table with `user_id uuid primary key` and `last_cursor bigint not null`.
+- Added helper functions `private.acquire_user_sync_lock(p_user_id)` and `private.allocate_sync_cursor(p_user_id, p_count)`.
+- Replaced `sync_change_feed` identity column with `primary key (user_id, cursor)`.
+- Hardened permissions: revoked direct writes on `sync_user_cursors`, `sync_change_feed`, and `sync_operations` from `public, anon, authenticated`.
+- Proved multi-user parallelism and same-user serialization via a genuine two-session test in `supabase/tests/concurrency_test.mjs`.
+- Verified 90 unit tests, 38 Playwright E2E tests, build, and zero diff check errors.
+- Migration `20261109013000_make_sync_change_cursors_transaction_safe.sql` applied to `spendly-dev`.

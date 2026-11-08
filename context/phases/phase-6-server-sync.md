@@ -114,13 +114,45 @@ If $\text{Balance} < 0$, the function raises an exception (`check_violation: 235
 
 ---
 
-## 6. Verification & Test Summary
-1. **Database Integration Tests (`supabase/tests/sync_rpc_tests.sql`)**:
-   - Ran against `spendly-dev` (`qmvigcbumiumaguwmmbk`) with full transactional rollback.
-   - Tested anonymous access rejection, idempotent replay, altered payload rejection, cross-user isolation, linked expense/withdrawal atomicity, savings funding split enforcement, overdraft prevention, and cursor pagination.
-   - **Result**: Passed with exit code 0.
-2. **Hosted Security Tests (`supabase/tests/rls_security.sql`)**:
-   - Ran against `spendly-dev`.
-   - **Result**: Passed with exit code 0.
-3. **Unit Tests (`npm test`)**: 90/90 passed.
-4. **Production Build (`npm run build`)**: Vite compiled in 341ms.
+## 6. Phase 6.1.1: Transaction-Safe Change Feed Cursors
+
+**Migration:** [`20261109013000_make_sync_change_cursors_transaction_safe.sql`](file:///d:/Spendly/supabase/migrations/20261109013000_make_sync_change_cursors_transaction_safe.sql)
+**Concurrency Test Suite:** [`supabase/tests/concurrency_test.mjs`](file:///d:/Spendly/supabase/tests/concurrency_test.mjs)
+
+### Root Problem
+In Phase 6.1, `sync_change_feed.cursor` used a PostgreSQL identity column (`bigint generated always as identity`). In PostgreSQL, sequence allocations occur before transaction commit and are non-transactional. If Transaction A acquired cursor 101 but remained in-flight, while Transaction B acquired cursor 102 and committed immediately, a client fetching `cursor > 100` would read cursor 102 and advance its local cursor to 102. When Transaction A later committed cursor 101, subsequent client fetches for `cursor > 102` permanently skipped Transaction A's financial record.
+
+### Transaction-Safe Architecture
+1. **Per-User Transactional Counter Table (`public.sync_user_cursors`)**:
+   - `user_id uuid primary key references auth.users(id) on delete cascade`
+   - `last_cursor bigint not null default 0 check (last_cursor >= 0)`
+   - `updated_at timestamptz not null default now()`
+   - RLS enabled and forced; only `authenticated` users can `SELECT` their own row; direct `INSERT, UPDATE, DELETE` are strictly revoked.
+2. **Account Lock Serialization Helper (`private.acquire_user_sync_lock`)**:
+   - Executes at the very beginning of `apply_sync_operation` after authentication and idempotency check.
+   - Acquires an exclusive `FOR UPDATE` row lock on `public.sync_user_cursors` for `user_id`.
+   - Concurrent operations for the *same user* block at this statement until the in-flight transaction finishes and commits.
+   - Operations for *different users* touch separate rows and execute concurrently without lock contention.
+3. **Monotonic Cursor Allocator (`private.allocate_sync_cursor`)**:
+   - Updates `sync_user_cursors`: `set last_cursor = last_cursor + p_count returning last_cursor - p_count + 1 into v_base_cursor`.
+   - Supports atomic block allocation for composite operations (e.g. allocating 2 cursors for savings-funded expense + linked withdrawal).
+   - If a transaction aborts or encounters an error, PostgreSQL automatically rolls back the update on `sync_user_cursors`, leaving 0 cursor gaps.
+4. **Partitioned Change Feed Primary Key**:
+   - Dropped the identity sequence on `public.sync_change_feed.cursor`.
+   - Replaced single-column PK with `primary key (user_id, cursor)`.
+
+---
+
+## 7. Verification & Test Summary
+1. **Multi-Session Concurrency Test Suite (`supabase/tests/concurrency_test.mjs`)**:
+   - **Same-User Row Lock Serialization**: Session 1 held a 3.0s lock on User A's row; Session 2 for User A was blocked for ~3s and only committed after Session 1 released the lock.
+   - **Multi-User Parallelism**: Session 3 for User B completed concurrently in 4.76s without blocking on User A.
+   - **Commit-Order Monotonicity**: User A's change feed committed cursors `[1, 2]` in strict sequential commit order with no skipped cursors.
+   - **Composite Operations**: Verified expense (cursor 4) and linked savings withdrawal (cursor 5) received consecutive cursors committed in the same transaction.
+   - **Rollback Safety**: Verified an aborted transaction rolled back the cursor counter, resulting in zero cursor gaps.
+   - **RLS & Privilege Hardening**: Direct `UPDATE` by authenticated users on `sync_user_cursors` is rejected with `permission denied`.
+2. **Database Integration Tests (`supabase/tests/sync_rpc_tests.sql`)**: Passed with exit code 0.
+3. **Hosted Security Tests (`supabase/tests/rls_security.sql`)**: Passed with exit code 0.
+4. **Unit Tests (`npm test`)**: 90/90 passed.
+5. **Production Build (`npm run build`)**: Vite compiled client bundle in 342ms.
+6. **Browser E2E Tests (`npm run test:e2e`)**: 38/38 Playwright scenarios passed.
