@@ -3428,6 +3428,45 @@ await run('Phase 8: Encrypted backup export, invalid passphrase rejection, and s
   await context.close();
 });
 
+await run('dashboard spending bar chart updates dynamically with smooth transitions across all 4 periods', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await gotoApp(page);
+
+  const bars = page.locator('#weekBars');
+  await bars.waitFor({ state: 'visible' });
+
+  // 1. Click "This week"
+  await page.locator('[data-period="week"]').click();
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('#weekTitle').innerText(), 'This week');
+  assert.equal(await page.locator('#weekSub').innerText(), 'Monday to Sunday');
+  assert.equal(await bars.locator('.week__column').count(), 7);
+
+  // 2. Click "This month"
+  await page.locator('[data-period="month"]').click();
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('#weekTitle').innerText(), 'This month');
+  assert.ok((await bars.locator('.week__column').count()) >= 4);
+
+  // 3. Click "3 months"
+  await page.locator('[data-period="quarter"]').click();
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('#weekTitle').innerText(), '3 months');
+  assert.equal(await bars.locator('.week__column').count(), 3);
+
+  // 4. Click "This year"
+  await page.locator('[data-period="year"]').click();
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('#weekTitle').innerText(), 'This year');
+  assert.equal(await bars.locator('.week__column').count(), 12);
+
+  await context.close();
+});
+
 /* -------------------------------------------------------------------------- */
 /* Results                                                                    */
 /* -------------------------------------------------------------------------- */

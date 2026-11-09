@@ -25,6 +25,7 @@ import {
   formatMonth,
   formatMonthKey,
   fromPaise,
+  getPeriodChartData,
   groupExpensesByMonth,
   groupSavingsByMonth,
   isMonthKey,
@@ -617,7 +618,7 @@ function render() {
   $('view-dashboard').classList.toggle('is-empty', state.expenses.length === 0);
   renderHero(summary);
   renderGlance(summary);
-  renderWeek(summary.week);
+  renderPeriodChart(state.selectedPeriod);
   renderRecent(summary.recent);
   renderExpensesPage(summary);
   renderSalaryPage();
@@ -710,25 +711,46 @@ function renderGlance(summary) {
   );
 }
 
+function renderPeriodChart(period = state.selectedPeriod || 'week') {
+  const chart = getPeriodChartData(state.expenses, period, new Date());
+  const titleEl = $('weekTitle');
+  const subEl = $('weekSub');
+  const totalEl = $('weekTotal');
+  const emptyEl = $('weekEmpty');
+  const barsEl = $('weekBars');
+
+  if (titleEl) titleEl.textContent = chart.title;
+  if (subEl) subEl.textContent = chart.subtitle;
+  if (totalEl) totalEl.textContent = formatMoney(chart.total);
+  if (emptyEl) {
+    emptyEl.hidden = chart.total > 0;
+    emptyEl.textContent = `No spending recorded ${chart.emptyLabel}.`;
+  }
+
+  if (barsEl) {
+    barsEl.style.setProperty('--columns', String(chart.columns.length));
+    barsEl.dataset.period = chart.period;
+    barsEl.setAttribute(
+      'aria-label',
+      `${chart.title} spending (${chart.subtitle}). Total: ${formatMoney(chart.total)}. ${chart.columns.map(col => `${col.label}: ${formatMoney(col.amount)}`).join('. ')}.`
+    );
+
+    barsEl.innerHTML = chart.columns.map((col, index) => {
+      const height = col.amount > 0 ? Math.max(6, Math.round((col.amount / chart.max) * 100)) : 3;
+      const classes = ['week__column'];
+      if (col.isCurrent) classes.push('is-today');
+      if (col.isFuture) classes.push('is-future');
+      const delay = (index * 0.04).toFixed(3);
+      return `<div class="${classes.join(' ')}" style="--bar-index:${index};" title="${escapeHTML(col.tooltip)}">
+        <div class="week__track"><span class="week__fill" style="height:${height}%;--bar-delay:${delay}s;"></span></div>
+        <span class="week__day">${escapeHTML(col.label)}</span>
+      </div>`;
+    }).join('');
+  }
+}
+
 function renderWeek(week) {
-  $('weekTotal').textContent = formatMoney(week.total);
-  $('weekEmpty').hidden = week.total > 0;
-
-  $('weekBars').innerHTML = week.days.map(day => {
-    const height = day.amount > 0 ? Math.max(6, Math.round((day.amount / week.max) * 100)) : 3;
-    const classes = ['week__column'];
-    if (day.isToday) classes.push('is-today');
-    if (day.isFuture) classes.push('is-future');
-    return `<div class="${classes.join(' ')}" title="${escapeHTML(`${day.weekday}: ${formatMoney(day.amount)}`)}">
-      <div class="week__track"><span class="week__fill" style="height:${height}%"></span></div>
-      <span class="week__day">${escapeHTML(day.weekday)}</span>
-    </div>`;
-  }).join('');
-
-  $('weekBars').setAttribute(
-    'aria-label',
-    `Daily spending this week. ${week.days.map(day => `${day.weekday}: ${formatMoney(day.amount)}`).join('. ')}.`
-  );
+  renderPeriodChart('week');
 }
 
 function renderRecent(recent) {
@@ -1337,6 +1359,7 @@ function selectPeriod(period) {
   const summary = summarize(state.expenses, new Date());
   renderHero(summary);
   renderGlance(summary);
+  renderPeriodChart(period);
 }
 
 function shiftSalaryMonth(delta, animate = true) {

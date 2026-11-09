@@ -516,3 +516,21 @@ Verification: `npm test` passed 60/60. `npm run test:e2e` passed 25/25, includin
   - Playwright E2E browser checks passing (`npm run test:e2e`).
   - Clean git diff check with zero formatting or whitespace anomalies.
   - See `context/design-system.md`.
+
+
+## 25. Dynamic Spending Period Bar Chart & Staggered Animations — 9 November 2026
+
+**Scope:** Transform static "This week" chart on the dashboard into a dynamic multi-period visual analytics bar chart responding to the selected spending period tile (This Week, This Month, 3 Months, This Year) with fluid staggered bar-growth animations.
+**Why:**
+- Users needed visual feedback reflecting their selected spending glance period beyond just the single hero number.
+- Providing distinct interval aggregations (daily for week, weekly intervals for month, monthly for quarter and year) keeps bar density readable and touch-friendly on all mobile viewports without horizontal scrolling.
+- **Architectural Implementation**:
+  - Implemented `getMonthOverview`, `getQuarterOverview`, `getYearOverview`, and `getPeriodChartData` in `js/core.js` with integer paise precision and deterministic boundary checks.
+  - Updated `selectPeriod` and `render` in `js/app.js` to dynamically invoke `renderPeriodChart` upon tile selection.
+  - Implemented CSS custom property `--bar-delay: calc(index * 0.04s)` and dynamic `--columns` grid template in `css/app.css` for a cascading fluid entrance animation ("one bar after the other").
+- **Verification Record**:
+  - 139/139 unit tests passing (`npm test`, 4 new tests in `tests/unit/core.test.mjs`).
+  - Production Vite bundle builds with zero errors (`npm run build`).
+  - 48/48 Playwright E2E browser checks passing (`npm run test:e2e`).
+  - Clean git diff check with zero formatting or whitespace anomalies.
+  - See `context/design-system.md`.

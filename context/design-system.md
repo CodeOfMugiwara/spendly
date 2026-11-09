@@ -155,3 +155,13 @@ The existing forest-green Salary card keeps Remaining Balance as its largest val
   - Dropdown displays large avatar, user email (`#dropdownEmailLabel`), sync badge, direct link to Data & Sync Settings, and the **Sign out** button (`#headerSignOutButton`).
   - Outside clicks dismiss the dropdown; `Escape` key closes and returns focus to `#userProfileBtn`.
 - **Mobile Adaptations**: On viewports `<520px`, the brand tagline auto-collapses; on viewports `<380px`, header buttons adapt to 32–34px with minimum 44px touch boundaries.
+
+## Addendum — 9 November 2026: Dynamic Spending Period Bar Chart & Staggered Animations
+
+- **Multi-Period Analytics**: The dashboard chart dynamically updates when selecting any period in **Spending at a glance**:
+  - *This week* (`week`): 7 daily columns (Monday to Sunday)
+  - *This month* (`month`): 4–5 weekly interval columns (1–7, 8–14, 15–21, 22–28, 29+)
+  - *3 months* (`quarter`): 3 monthly columns
+  - *This year* (`year`): 12 calendar monthly columns
+- **Cascading Staggered Animation**: Each bar fill animates vertically (`@keyframes bar-grow`) with an incremental delay (`--bar-delay: calc(index * 0.04s)`), creating a fluid wave where bars rise smoothly one after the other.
+- **Accessible & Mobile Optimized**: CSS Grid dynamically shifts `--columns` without horizontal scrolling. Respects `prefers-reduced-motion` by disabling animation.

@@ -471,6 +471,187 @@ export function getWeekOverview(expenses, now = new Date()) {
   return { ...bounds, total, days, max, today };
 }
 
+/**
+ * Month overview broken down into weekly interval buckets (1-7, 8-14, 15-21, 22-28, 29+).
+ */
+export function getMonthOverview(expenses, now = new Date()) {
+  const bounds = getPeriodBounds('month', now);
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const currentMonthKey = bounds.start.slice(0, 7);
+  const isCurrentMonth = localToday(now).startsWith(currentMonthKey);
+  const actualTodayDay = isCurrentMonth ? now.getDate() : 999;
+
+  const rawBuckets = [
+    { start: 1, end: 7 },
+    { start: 8, end: 14 },
+    { start: 15, end: 21 },
+    { start: 22, end: 28 }
+  ];
+  if (daysInMonth > 28) {
+    rawBuckets.push({ start: 29, end: daysInMonth });
+  }
+
+  const monthExpenses = expenses.filter(e => e.date >= bounds.start && e.date < bounds.end);
+
+  const columns = rawBuckets.map((bucket, index) => {
+    const startStr = `${currentMonthKey}-${String(bucket.start).padStart(2, '0')}`;
+    const endStr = `${currentMonthKey}-${String(bucket.end).padStart(2, '0')}`;
+    const totalPaise = monthExpenses
+      .filter(e => e.date >= startStr && e.date <= endStr)
+      .reduce((sum, e) => sum + (e.amountPaise != null ? e.amountPaise : toPaise(e.amount)), 0);
+    const amount = fromPaise(totalPaise);
+
+    const isCurrent = isCurrentMonth && actualTodayDay >= bucket.start && actualTodayDay <= bucket.end;
+    const isFuture = isCurrentMonth && actualTodayDay < bucket.start;
+
+    return {
+      key: `bucket-${index}`,
+      label: bucket.start === 29 ? `29–${bucket.end}` : `${bucket.start}–${bucket.end}`,
+      amount,
+      isCurrent,
+      isFuture,
+      tooltip: `Days ${bucket.start}–${bucket.end}: ${formatMoney(amount)}`
+    };
+  });
+
+  const total = roundMoney(columns.reduce((sum, col) => sum + col.amount, 0));
+  const max = Math.max(1, ...columns.map(col => col.amount));
+  return {
+    period: 'month',
+    title: 'This month',
+    subtitle: monthYear.format(now),
+    emptyLabel: 'this month',
+    total,
+    max,
+    columns
+  };
+}
+
+/**
+ * Rolling 3-month overview broken down by calendar month.
+ */
+export function getQuarterOverview(expenses, now = new Date()) {
+  const year = now.getFullYear();
+  const currentMonth = now.getMonth();
+  const currentMonthKey = toISODate(new Date(year, currentMonth, 1, 12)).slice(0, 7);
+
+  const monthKeys = [];
+  for (let offset = 2; offset >= 0; offset -= 1) {
+    const d = new Date(year, currentMonth - offset, 1, 12);
+    monthKeys.push(toISODate(d).slice(0, 7));
+  }
+
+  const columns = monthKeys.map(key => {
+    const startStr = `${key}-01`;
+    const nextMonth = shiftMonth(key, 1);
+    const endStr = `${nextMonth}-01`;
+    const totalPaise = expenses
+      .filter(e => e.date >= startStr && e.date < endStr)
+      .reduce((sum, e) => sum + (e.amountPaise != null ? e.amountPaise : toPaise(e.amount)), 0);
+    const amount = fromPaise(totalPaise);
+    const isCurrent = (key === currentMonthKey);
+
+    return {
+      key,
+      label: shortMonthLabel(key),
+      amount,
+      isCurrent,
+      isFuture: false,
+      tooltip: `${formatMonth(key)}: ${formatMoney(amount)}`
+    };
+  });
+
+  const total = roundMoney(columns.reduce((sum, col) => sum + col.amount, 0));
+  const max = Math.max(1, ...columns.map(col => col.amount));
+  const startMonthStr = shortMonthLabel(monthKeys[0]);
+  const endMonthStr = shortMonthLabel(monthKeys[2], { withYear: true });
+
+  return {
+    period: 'quarter',
+    title: '3 months',
+    subtitle: `${startMonthStr} – ${endMonthStr}`,
+    emptyLabel: 'in the last 3 months',
+    total,
+    max,
+    columns
+  };
+}
+
+/**
+ * Full calendar year overview broken down into 12 months.
+ */
+export function getYearOverview(expenses, now = new Date()) {
+  const year = now.getFullYear();
+  const currentMonth = now.getMonth();
+
+  const columns = [];
+  for (let m = 0; m < 12; m += 1) {
+    const key = `${year}-${String(m + 1).padStart(2, '0')}`;
+    const startStr = `${key}-01`;
+    const nextMonth = shiftMonth(key, 1);
+    const endStr = `${nextMonth}-01`;
+    const totalPaise = expenses
+      .filter(e => e.date >= startStr && e.date < endStr)
+      .reduce((sum, e) => sum + (e.amountPaise != null ? e.amountPaise : toPaise(e.amount)), 0);
+    const amount = fromPaise(totalPaise);
+    const isCurrent = (m === currentMonth);
+    const isFuture = (m > currentMonth);
+
+    columns.push({
+      key,
+      label: shortMonthLabel(key),
+      amount,
+      isCurrent,
+      isFuture,
+      tooltip: `${formatMonth(key)}: ${formatMoney(amount)}`
+    });
+  }
+
+  const total = roundMoney(columns.reduce((sum, col) => sum + col.amount, 0));
+  const max = Math.max(1, ...columns.map(col => col.amount));
+
+  return {
+    period: 'year',
+    title: 'This year',
+    subtitle: `${year}`,
+    emptyLabel: 'this year',
+    total,
+    max,
+    columns
+  };
+}
+
+/**
+ * Unified chart provider for any selected period.
+ */
+export function getPeriodChartData(expenses, period = 'week', now = new Date()) {
+  if (period === 'month') return getMonthOverview(expenses, now);
+  if (period === 'quarter') return getQuarterOverview(expenses, now);
+  if (period === 'year') return getYearOverview(expenses, now);
+
+  const week = getWeekOverview(expenses, now);
+  const columns = week.days.map((day) => ({
+    key: day.iso,
+    label: day.weekday,
+    amount: day.amount,
+    isCurrent: day.isToday,
+    isFuture: day.isFuture,
+    tooltip: `${day.weekday}: ${formatMoney(day.amount)}`
+  }));
+
+  return {
+    period: 'week',
+    title: 'This week',
+    subtitle: 'Monday to Sunday',
+    emptyLabel: 'this week',
+    total: week.total,
+    max: week.max,
+    columns
+  };
+}
+
 export function summarize(expenses, now = new Date()) {
   const periods = {};
   for (const period of PERIODS) {

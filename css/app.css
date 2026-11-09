@@ -1024,9 +1024,18 @@ svg {
 
 .week__bars {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--columns, 7), minmax(0, 1fr));
   gap: 7px;
   margin-top: 17px;
+  transition: gap 0.2s ease;
+}
+
+.week__bars[data-period="quarter"] {
+  gap: 16px;
+}
+
+.week__bars[data-period="year"] {
+  gap: 4px;
 }
 
 .week__column {
@@ -1053,15 +1062,16 @@ svg {
   border-radius: 8px;
   background: linear-gradient(180deg, #3b9c64, #176b3a);
   transform-origin: bottom;
-  animation: bar-grow 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: bar-grow 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--bar-delay, 0s);
 }
 
-.week__column:nth-child(2) .week__fill { animation-delay: 0.035s; }
-.week__column:nth-child(3) .week__fill { animation-delay: 0.07s; }
-.week__column:nth-child(4) .week__fill { animation-delay: 0.105s; }
-.week__column:nth-child(5) .week__fill { animation-delay: 0.14s; }
-.week__column:nth-child(6) .week__fill { animation-delay: 0.175s; }
-.week__column:nth-child(7) .week__fill { animation-delay: 0.21s; }
+.week__column:nth-child(2) .week__fill { animation-delay: var(--bar-delay, 0.035s); }
+.week__column:nth-child(3) .week__fill { animation-delay: var(--bar-delay, 0.07s); }
+.week__column:nth-child(4) .week__fill { animation-delay: var(--bar-delay, 0.105s); }
+.week__column:nth-child(5) .week__fill { animation-delay: var(--bar-delay, 0.14s); }
+.week__column:nth-child(6) .week__fill { animation-delay: var(--bar-delay, 0.175s); }
+.week__column:nth-child(7) .week__fill { animation-delay: var(--bar-delay, 0.21s); }
 
 .week__column.is-today .week__fill {
   background: linear-gradient(180deg, #61c486, #1d7c46);
@@ -3431,6 +3441,15 @@ svg {
 
   .profile-btn__avatar {
     font-size: 12px;
+  }
+
+  .week__bars[data-period="year"] {
+    gap: 2.5px;
+  }
+
+  .week__bars[data-period="year"] .week__day {
+    font-size: 8px;
+    letter-spacing: -0.02em;
   }
 
   .hero {

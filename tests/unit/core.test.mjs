@@ -7,13 +7,18 @@ import {
   formatDate,
   formatMoney,
   formatMoneyParts,
+  getMonthOverview,
   getPeriodBounds,
+  getPeriodChartData,
+  getQuarterOverview,
   getWeekOverview,
+  getYearOverview,
   groupExpensesByMonth,
   matchesQuery,
   normalizeExpenseRecord,
   parseAmountInput,
   parseISODate,
+  shortMonthLabel,
   sortExpenses,
   summarize,
   timestampFromLegacyId,
@@ -124,6 +129,69 @@ test('week overview has Monday-first days and marks today', () => {
   assert.equal(week.days[2].isToday, true);
   assert.equal(week.days[6].isFuture, true);
   assert.equal(week.total, 350);
+});
+
+test('month overview groups days into weekly buckets and marks current bucket', () => {
+  const month = getMonthOverview(sample, NOW);
+  assert.equal(month.period, 'month');
+  assert.equal(month.columns.length, 5); // Nov has 30 days -> 1-7, 8-14, 15-21, 22-28, 29-30
+  assert.equal(month.columns[0].label, '1–7');
+  assert.equal(month.columns[0].amount, 350); // Nov 2 (100) + Nov 4 (250)
+  assert.equal(month.columns[0].isCurrent, true);
+  assert.equal(month.columns[1].isCurrent, false);
+  assert.equal(month.columns[1].isFuture, true);
+  assert.equal(month.total, 350);
+  assert.equal(month.max, 350);
+});
+
+test('quarter overview provides 3 rolling months and totals', () => {
+  const quarter = getQuarterOverview(sample, NOW);
+  assert.equal(quarter.period, 'quarter');
+  assert.equal(quarter.columns.length, 3);
+  assert.equal(quarter.columns[0].label, shortMonthLabel('2026-09'));
+  assert.equal(quarter.columns[0].amount, 200);
+  assert.equal(quarter.columns[1].label, shortMonthLabel('2026-10'));
+  assert.equal(quarter.columns[1].amount, 500);
+  assert.equal(quarter.columns[2].label, shortMonthLabel('2026-11'));
+  assert.equal(quarter.columns[2].amount, 350);
+  assert.equal(quarter.columns[2].isCurrent, true);
+  assert.equal(quarter.total, 1050);
+});
+
+test('year overview provides 12 calendar months and highlights current month', () => {
+  const year = getYearOverview(sample, NOW);
+  assert.equal(year.period, 'year');
+  assert.equal(year.columns.length, 12);
+  assert.equal(year.columns[0].label, shortMonthLabel('2026-01'));
+  assert.equal(year.columns[0].amount, 1000); // Rent
+  assert.equal(year.columns[8].label, shortMonthLabel('2026-09'));
+  assert.equal(year.columns[8].amount, 200);
+  assert.equal(year.columns[9].label, shortMonthLabel('2026-10'));
+  assert.equal(year.columns[9].amount, 500);
+  assert.equal(year.columns[10].label, shortMonthLabel('2026-11'));
+  assert.equal(year.columns[10].amount, 350);
+  assert.equal(year.columns[10].isCurrent, true);
+  assert.equal(year.columns[11].label, shortMonthLabel('2026-12'));
+  assert.equal(year.columns[11].isFuture, true);
+  assert.equal(year.total, 2050);
+});
+
+test('getPeriodChartData unifies chart properties across all 4 periods', () => {
+  const weekData = getPeriodChartData(sample, 'week', NOW);
+  assert.equal(weekData.period, 'week');
+  assert.equal(weekData.columns.length, 7);
+
+  const monthData = getPeriodChartData(sample, 'month', NOW);
+  assert.equal(monthData.period, 'month');
+  assert.equal(monthData.columns.length, 5);
+
+  const quarterData = getPeriodChartData(sample, 'quarter', NOW);
+  assert.equal(quarterData.period, 'quarter');
+  assert.equal(quarterData.columns.length, 3);
+
+  const yearData = getPeriodChartData(sample, 'year', NOW);
+  assert.equal(yearData.period, 'year');
+  assert.equal(yearData.columns.length, 12);
 });
 
 test('sorting is newest first with a stable tie-break', () => {
