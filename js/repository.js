@@ -1958,4 +1958,211 @@ export class FinancialLedgerRepository {
     if (!this.db.objectStoreNames.contains('extraIncome')) return Promise.resolve([]);
     return this.#transaction(['extraIncome'], 'readonly', ({ snapshots }) => snapshots.extraIncome || []);
   }
+
+  /**
+   * Export a full raw snapshot of all stores for backup generation.
+   */
+  exportFullSnapshot() {
+    const stores = ['expenses', 'salaries', 'savings', 'extraIncome', 'meta'];
+    if (this.db.objectStoreNames.contains('outbox')) stores.push('outbox');
+
+    return this.#transaction(stores, 'readonly', ({ snapshots }) => {
+      return {
+        expenses: (snapshots.expenses || []).map(e => ({ ...e })),
+        salaries: (snapshots.salaries || []).map(s => ({ ...s })),
+        savings: (snapshots.savings || []).map(s => ({ ...s })),
+        extraIncome: (snapshots.extraIncome || []).map(i => ({ ...i })),
+        meta: (snapshots.meta || []).map(m => ({ ...m })),
+        outbox: (snapshots.outbox || []).map(o => ({ ...o }))
+      };
+    });
+  }
+
+  /**
+   * Restore collections from validated backup data.
+   * Supports 'replace' (atomic replacement) and 'merge' (safe additive merge).
+   */
+  restoreCollections({ data, mode = 'merge' }) {
+    const baseStores = ['expenses', 'salaries', 'savings', 'extraIncome', 'meta'];
+    return this.#transaction(this.#storesWithOutbox(baseStores), 'readwrite', ({ collections, snapshots }) => {
+      const incomingSalaries = Array.isArray(data.salaries) ? data.salaries : [];
+      const incomingExpenses = Array.isArray(data.expenses) ? data.expenses : [];
+      const incomingSavings = Array.isArray(data.savings) ? data.savings : [];
+      const incomingExtraIncome = Array.isArray(data.extraIncome) ? data.extraIncome : [];
+      const incomingOutbox = Array.isArray(data.outbox) ? data.outbox : [];
+      const incomingMeta = Array.isArray(data.meta) ? data.meta : [];
+
+      if (mode === 'replace') {
+        // Clear all domain collections
+        collections.expenses.clear();
+        collections.salaries.clear();
+        collections.savings.clear();
+        collections.extraIncome.clear();
+
+        for (const item of incomingExpenses) collections.expenses.put(item);
+        for (const item of incomingSalaries) collections.salaries.put(item);
+        for (const item of incomingSavings) collections.savings.put(item);
+        for (const item of incomingExtraIncome) collections.extraIncome.put(item);
+
+        // Outbox handling: restore pending outbox operations
+        if (collections.outbox) {
+          collections.outbox.clear();
+          for (const op of incomingOutbox) {
+            if (op.status === OUTBOX_STATUS.PENDING || op.status === OUTBOX_STATUS.BLOCKED) {
+              collections.outbox.put(op);
+            }
+          }
+        }
+
+        // Reconcile synchronization cursor
+        const currentCursorMeta = snapshots.meta?.find(m => m.key === 'sync:lastSyncedCursor');
+        const backupCursorMeta = incomingMeta.find(m => m.key === 'sync:lastSyncedCursor');
+        const currentCursor = Number(currentCursorMeta?.value || 0);
+        const backupCursor = Number(backupCursorMeta?.value || 0);
+        const reconciledCursor = Math.max(currentCursor, backupCursor);
+        if (reconciledCursor > 0) {
+          collections.meta.put({
+            key: 'sync:lastSyncedCursor',
+            value: String(reconciledCursor),
+            updatedAt: this.now().toISOString()
+          });
+        }
+
+        return {
+          mode: 'replace',
+          expenseCount: incomingExpenses.length,
+          salaryCount: incomingSalaries.length,
+          savingsCount: incomingSavings.length,
+          extraIncomeCount: incomingExtraIncome.length,
+          outboxCount: incomingOutbox.length
+        };
+      }
+
+      // Merge mode: safe additive merge without overwriting newer local edits
+      let addedExpenses = 0;
+      let updatedExpenses = 0;
+      let addedSalaries = 0;
+      let addedSavings = 0;
+      let updatedSavings = 0;
+      let addedExtraIncome = 0;
+      let updatedExtraIncome = 0;
+
+      // 1. Salaries (1 salary per monthKey enforced)
+      const existingSalariesByMonth = new Map((snapshots.salaries || []).map(s => [s.monthKey, s]));
+      const existingSalariesById = new Map((snapshots.salaries || []).map(s => [s.id, s]));
+
+      for (const salary of incomingSalaries) {
+        const existingWithMonth = existingSalariesByMonth.get(salary.monthKey);
+        if (existingWithMonth) {
+          if (existingWithMonth.id === salary.id) {
+            const incomingTime = Date.parse(salary.updatedAt || salary.createdAt || '');
+            const existingTime = Date.parse(existingWithMonth.updatedAt || existingWithMonth.createdAt || '');
+            if (Number.isFinite(incomingTime) && incomingTime > existingTime) {
+              collections.salaries.put(salary);
+            }
+          }
+          // If different id has same monthKey, keep existing to prevent duplicate month conflict
+          continue;
+        }
+
+        const existingWithId = existingSalariesById.get(salary.id);
+        if (!existingWithId) {
+          collections.salaries.put(salary);
+          existingSalariesByMonth.set(salary.monthKey, salary);
+          existingSalariesById.set(salary.id, salary);
+          addedSalaries++;
+        }
+      }
+
+      // 2. Extra income
+      const existingExtraById = new Map((snapshots.extraIncome || []).map(i => [i.id, i]));
+      for (const item of incomingExtraIncome) {
+        const existing = existingExtraById.get(item.id);
+        if (!existing) {
+          collections.extraIncome.put(item);
+          existingExtraById.set(item.id, item);
+          addedExtraIncome++;
+        } else {
+          const incomingTime = Date.parse(item.updatedAt || item.createdAt || '');
+          const existingTime = Date.parse(existing.updatedAt || existing.createdAt || '');
+          if (Number.isFinite(incomingTime) && incomingTime > existingTime) {
+            collections.extraIncome.put(item);
+            updatedExtraIncome++;
+          }
+        }
+      }
+
+      // 3. Expenses
+      const existingExpensesById = new Map((snapshots.expenses || []).map(e => [e.id, e]));
+      for (const item of incomingExpenses) {
+        const existing = existingExpensesById.get(item.id);
+        if (!existing) {
+          collections.expenses.put(item);
+          existingExpensesById.set(item.id, item);
+          addedExpenses++;
+        } else {
+          const incomingTime = Date.parse(item.updatedAt || item.createdAt || '');
+          const existingTime = Date.parse(existing.updatedAt || existing.createdAt || '');
+          if (Number.isFinite(incomingTime) && incomingTime > existingTime) {
+            collections.expenses.put(item);
+            updatedExpenses++;
+          }
+        }
+      }
+
+      // 4. Savings
+      const existingSavingsById = new Map((snapshots.savings || []).map(s => [s.id, s]));
+      for (const item of incomingSavings) {
+        const existing = existingSavingsById.get(item.id);
+        if (!existing) {
+          collections.savings.put(item);
+          existingSavingsById.set(item.id, item);
+          addedSavings++;
+        } else {
+          const incomingTime = Date.parse(item.updatedAt || item.createdAt || '');
+          const existingTime = Date.parse(existing.updatedAt || existing.createdAt || '');
+          if (Number.isFinite(incomingTime) && incomingTime > existingTime) {
+            collections.savings.put(item);
+            updatedSavings++;
+          }
+        }
+      }
+
+      // 5. Outbox merge
+      if (collections.outbox) {
+        const existingOutboxIds = new Set((snapshots.outbox || []).map(o => o.operationId));
+        for (const op of incomingOutbox) {
+          if (!existingOutboxIds.has(op.operationId) && (op.status === OUTBOX_STATUS.PENDING || op.status === OUTBOX_STATUS.BLOCKED)) {
+            collections.outbox.put(op);
+            existingOutboxIds.add(op.operationId);
+          }
+        }
+      }
+
+      // 6. Cursor reconciliation
+      const currentCursorMeta = snapshots.meta?.find(m => m.key === 'sync:lastSyncedCursor');
+      const backupCursorMeta = incomingMeta.find(m => m.key === 'sync:lastSyncedCursor');
+      const currentCursor = Number(currentCursorMeta?.value || 0);
+      const backupCursor = Number(backupCursorMeta?.value || 0);
+      const reconciledCursor = Math.max(currentCursor, backupCursor);
+      if (reconciledCursor > 0) {
+        collections.meta.put({
+          key: 'sync:lastSyncedCursor',
+          value: String(reconciledCursor),
+          updatedAt: this.now().toISOString()
+        });
+      }
+
+      return {
+        mode: 'merge',
+        addedExpenses,
+        updatedExpenses,
+        addedSalaries,
+        addedSavings,
+        updatedSavings,
+        addedExtraIncome,
+        updatedExtraIncome
+      };
+    });
+  }
 }

@@ -447,3 +447,27 @@ Verification: `npm test` passed 60/60. `npm run test:e2e` passed 25/25, includin
   - Vite production build cleanly generating 11 transformed modules in 325ms.
   - Clean git diff check with zero formatting or whitespace anomalies.
   - See `context/phases/phase-6-server-sync.md`.
+
+## 22. Phase 7 — 9 November 2026 — Data Recovery, Backup Validation & Sync Integration
+
+**Scope:** Complete client-side disaster recovery, schema v7 full backup export, validation engine, Web Crypto encryption, and sync reconciliation.
+**Why:** Protect personal financial ledgers against browser data clearing, device loss, and corruption while maintaining strict account isolation, integer paise accuracy, and outbox synchronization consistency.
+- **Dedicated Backup Engine (`js/backup.js`)**:
+  - Implemented versioned JSON backup format (`schemaVersion: 7`, `version: 7`, `app: 'Spendly'`).
+  - Exports full financial state: salaries, expenses, savings, extra income, outbox operations, sync cursor, and account ownership (`userId`, `email`, `isAnonymous`).
+  - Client-side Web Crypto API encryption/decryption: `AES-GCM` with 256-bit key and `PBKDF2-SHA256` key derivation (100k iterations).
+  - Pre-import validation engine: verifies envelope, rejects future schema versions, enforces account ownership isolation (blocks User A restoring into User B), validates relational integrity (duplicate salaries, unlinked savings withdrawals, extra-income allocation ceilings, non-negative savings balance).
+- **Repository Extensions (`js/repository.js`)**:
+  - `exportFullSnapshot()`: Atomic read across all 6 collections in a single transaction.
+  - `restoreCollections({ data, mode })`: Supports destructive `replace` (with cursor set to `max(localCursor, backupCursor)`) and safe additive `merge` (preserving local records and merging pending outbox operations).
+- **User Experience & Safety (`js/app.js`)**:
+  - Automatically exports safety backup (`spendly-before-restore-<date>.json`) prior to replacement restoration.
+  - Interactive replacement vs merge confirmation prompt with preview of imported records.
+  - Sync reconciliation: restored pending outbox operations upload cleanly without duplicating acknowledged cloud records.
+- **Full Verification**:
+  - 131/131 unit tests passing (15 new tests in `tests/unit/backup.test.mjs`).
+  - 46/46 Playwright E2E browser checks passing (4 new browser scenarios covering export, ownership blocking, corrupt rejection, and outbox sync recovery).
+  - 4/4 concurrency integration tests passing against `spendly-dev`.
+  - Vite production build cleanly generating 12 transformed modules in 530ms.
+  - Clean git diff check with zero formatting or whitespace anomalies.
+  - See `context/phases/phase-7-backup-recovery.md`.

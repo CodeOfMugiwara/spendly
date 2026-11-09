@@ -40,6 +40,7 @@ const APP_SHELL_PATHS = [
   '/js/supabase.js',
   '/js/vendor/supabase.js',
   '/js/sync.js',
+  '/js/backup.js',
   '/manifest.json',
   '/icons/icon-180.png',
   '/icons/icon-192.png',
@@ -517,7 +518,9 @@ await run('add, edit, delete, undo, search, CSV, backup and restore work', async
   const backup = await downloadFrom(page, () => page.locator('#downloadBackup').click());
   const parsedBackup = JSON.parse(backup.text);
   assert.equal(parsedBackup.app, 'Spendly');
-  assert.equal(parsedBackup.version, 5);
+  assert.ok([5, 7].includes(parsedBackup.version));
+  assert.equal(parsedBackup.schemaVersion, 7);
+  assert.ok(parsedBackup.account);
   assert.equal(parsedBackup.expenses.length, 1);
   assert.ok(parsedBackup.expenses[0].createdAt);
   assert.equal(parsedBackup.salaries.length, 1);
@@ -3019,6 +3022,294 @@ await run('Phase 6: Permanent server rejection marks operation blocked with UI r
   assert.equal(snap.outbox[0].status, 'acknowledged');
 
   await page.locator('#closeDataSettings').click();
+
+  await context.close();
+});
+
+/* -------------------------------------------------------------------------- */
+/* 10. Phase 7: Data Recovery, Backup Validation & Sync Integration          */
+/* -------------------------------------------------------------------------- */
+
+await run('Phase 7: Full backup download exports schema v7 with integer paise, outbox & account metadata', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.route('**/rest/v1/rpc/apply_sync_operation*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, cursor: 1 })
+    });
+  });
+  await page.route('**/rest/v1/rpc/get_sync_changes*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ changes: [], nextCursor: 0, hasMore: false })
+    });
+  });
+
+  await gotoApp(page);
+
+  await addSalary(page, { amount: '75000' });
+  await waitForToast(page, 'Salary saved.');
+  await page.locator('[data-view="dashboard"]').click();
+  await addExpense(page, { amount: '450', description: 'Phase 7 Dinner', source: 'others' });
+  await waitForToast(page, 'Expense recorded under Others');
+
+  await openDataSettings(page);
+  const backup = await downloadFrom(page, () => page.locator('#downloadBackup').click());
+  const parsed = JSON.parse(backup.text);
+
+  assert.equal(parsed.app, 'Spendly');
+  assert.equal(parsed.schemaVersion, 7);
+  assert.equal(parsed.version, 7);
+  assert.equal(parsed.appVersion, '3.7.0');
+  assert.ok(parsed.exportedAt);
+
+  assert.equal(parsed.account.userId, MOCK_AUTH_USER.id);
+  assert.equal(parsed.account.email, MOCK_AUTH_USER.email);
+  assert.equal(parsed.account.isAnonymous, false);
+
+  assert.ok(parsed.expenses.length >= 1);
+  const exp = parsed.expenses.find(e => e.description === 'Phase 7 Dinner');
+  assert.ok(exp);
+  assert.equal(exp.amountPaise, 45000);
+
+  assert.ok(parsed.salaries.length >= 1);
+  assert.equal(parsed.salaries[0].amountPaise, 7500000);
+
+  assert.ok(Array.isArray(parsed.outbox));
+  assert.ok(Array.isArray(parsed.meta));
+
+  await page.locator('#closeDataSettings').click();
+  await context.close();
+});
+
+await run('Phase 7: Account ownership mismatch blocks cross-account backup restore', async () => {
+  const emilyUser = {
+    id: '00000000-0000-4000-8000-000000000002',
+    email: 'emily@spendly.local',
+    aud: 'authenticated',
+    role: 'authenticated',
+    app_metadata: { provider: 'email' },
+    user_metadata: {}
+  };
+
+  const context = await createContext({ user: emilyUser });
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.route('**/rest/v1/rpc/apply_sync_operation*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, cursor: 1 })
+    });
+  });
+  await page.route('**/rest/v1/rpc/get_sync_changes*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ changes: [], nextCursor: 0, hasMore: false })
+    });
+  });
+
+  await gotoApp(page);
+
+  const alexBackupPath = path.join(RESULTS, 'alex-backup.json');
+  const alexBackupContent = {
+    app: 'Spendly',
+    schemaVersion: 7,
+    version: 7,
+    exportedAt: new Date().toISOString(),
+    account: {
+      userId: MOCK_AUTH_USER.id,
+      email: MOCK_AUTH_USER.email,
+      isAnonymous: false
+    },
+    expenses: [
+      { id: 'alex-secret-exp', amount: 5000, description: 'Alex Secret Expense', date: toISODate(new Date()), paymentSource: 'others' }
+    ],
+    salaries: [],
+    savings: [],
+    extraIncome: [],
+    outbox: [],
+    meta: []
+  };
+  await writeFile(alexBackupPath, JSON.stringify(alexBackupContent));
+
+  await openDataSettings(page);
+  await page.locator('#fileInput').setInputFiles(alexBackupPath);
+
+  await waitForToast(page, 'Cross-account restoration is prevented');
+  assert.equal(await page.locator('#actionSheet').isVisible(), false, 'Action sheet must not open on ownership mismatch');
+
+  const snap = await dbSnapshot(page);
+  assert.equal(snap.records.length, 0, 'No data from Alex should be imported into Emily account');
+
+  await page.locator('#closeDataSettings').click();
+  await context.close();
+});
+
+await run('Phase 7: Corrupted or structurally invalid backups are rejected without modifying local state', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.route('**/rest/v1/rpc/apply_sync_operation*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, cursor: 1 })
+    });
+  });
+  await page.route('**/rest/v1/rpc/get_sync_changes*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ changes: [], nextCursor: 0, hasMore: false })
+    });
+  });
+
+  await gotoApp(page);
+  await addExpense(page, { amount: '120', description: 'Existing Safe Item', source: 'others' });
+  await waitForToast(page, 'Expense recorded under Others');
+
+  const corruptedPath = path.join(RESULTS, 'corrupted-duplicate-month.json');
+  const corruptedContent = {
+    app: 'Spendly',
+    schemaVersion: 7,
+    version: 7,
+    account: { userId: MOCK_AUTH_USER.id, email: MOCK_AUTH_USER.email, isAnonymous: false },
+    salaries: [
+      { id: 'sal-1', monthKey: '2026-11', amount: 50000 },
+      { id: 'sal-2', monthKey: '2026-11', amount: 60000 }
+    ],
+    expenses: []
+  };
+  await writeFile(corruptedPath, JSON.stringify(corruptedContent));
+
+  await openDataSettings(page);
+  await page.locator('#fileInput').setInputFiles(corruptedPath);
+
+  await waitForToast(page, 'Duplicate salary month');
+  assert.equal(await page.locator('#actionSheet').isVisible(), false);
+
+  const snap = await dbSnapshot(page);
+  assert.equal(snap.records.length, 1);
+  assert.equal(snap.records[0].description, 'Existing Safe Item');
+
+  await page.locator('#closeDataSettings').click();
+  await context.close();
+});
+
+await run('Phase 7: Restoring backup with pending outbox operations reconciles with sync engine', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  const serverReceivedOps = [];
+  await page.route('**/rest/v1/rpc/apply_sync_operation*', async route => {
+    const postData = route.request().postDataJSON();
+    serverReceivedOps.push(postData.p_operation);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, cursor: 301 })
+    });
+  });
+  await page.route('**/rest/v1/rpc/get_sync_changes*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ changes: [], nextCursor: 0, hasMore: false })
+    });
+  });
+
+  await gotoApp(page);
+
+  const restoredExpId = 'f1f1f1f1-1111-4000-8000-111111111111';
+  const restoredOpId = 'f2f2f2f2-2222-4000-8000-222222222222';
+  const backupToRestorePath = path.join(RESULTS, 'sync-recovery-backup.json');
+  const backupContent = {
+    app: 'Spendly',
+    schemaVersion: 7,
+    version: 7,
+    account: { userId: MOCK_AUTH_USER.id, email: MOCK_AUTH_USER.email, isAnonymous: false },
+    expenses: [
+      {
+        id: restoredExpId,
+        amount: 880,
+        amountPaise: 88000,
+        description: 'Recovered Flight Ticket',
+        date: toISODate(new Date()),
+        paymentSource: 'others',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    ],
+    salaries: [],
+    savings: [],
+    extraIncome: [],
+    outbox: [
+      {
+        operationId: restoredOpId,
+        sequence: 1,
+        operationType: 'expense:create',
+        entityType: 'expense',
+        entityId: restoredExpId,
+        status: 'pending',
+        payload: {
+          expense: {
+            id: restoredExpId,
+            amount: 880,
+            amount_paise: 88000,
+            description: 'Recovered Flight Ticket',
+            transaction_date: toISODate(new Date()),
+            payment_source: 'others',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }
+        },
+        createdAt: new Date().toISOString()
+      }
+    ],
+    meta: [
+      { key: 'sync:lastSyncedCursor', value: '300' }
+    ]
+  };
+  await writeFile(backupToRestorePath, JSON.stringify(backupContent));
+
+  await openDataSettings(page);
+  await page.locator('#fileInput').setInputFiles(backupToRestorePath);
+
+  await page.locator('#actionSheet').waitFor({ state: 'visible' });
+  await downloadFrom(page, () => page.locator('#actionList .action__item').click());
+  await waitForToast(page, 'Backup restored');
+
+  await page.locator('#closeDataSettings').click();
+
+  await page.locator('[data-view="expenses"]').click();
+  await page.locator('#historyList .entry').filter({ hasText: 'Recovered Flight Ticket' }).waitFor({ state: 'visible' });
+
+  await page.waitForFunction(() => {
+    const conn = document.getElementById('connection');
+    return conn && conn.dataset.state === 'synced';
+  }, null, { timeout: 10000 });
+
+  assert.equal(await page.locator('#connectionText').innerText(), 'Synced');
+  assert.ok(serverReceivedOps.length >= 1, 'Sync engine uploaded the restored pending outbox operation');
+  assert.ok(serverReceivedOps.some(op => op.operationId === restoredOpId));
+
+  const snap = await dbSnapshot(page);
+  const outboxOp = snap.outbox.find(op => op.operationId === restoredOpId);
+  assert.equal(outboxOp?.status, 'acknowledged');
 
   await context.close();
 });

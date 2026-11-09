@@ -72,6 +72,13 @@ import {
   SYNC_STATUS
 } from './sync.js';
 import {
+  createBackupPayload,
+  validateBackup,
+  BackupValidationError,
+  BackupOwnershipMismatchError,
+  BACKUP_MAX_FILE_SIZE
+} from './backup.js';
+import {
   DuplicateMonthError,
   AlreadyReversedError,
   FinancialLedgerRepository,
@@ -2277,21 +2284,33 @@ function snapshotData() {
 }
 
 function backupPayload(data = snapshotData()) {
-  return {
-    app: 'Spendly',
-    version: 5,
-    exportedAt: new Date().toISOString(),
-    expenses: sortExpenses(data.expenses ?? []),
-    salaries: [...(data.salaries ?? [])],
-    savings: [...(data.savings ?? [])],
-    extraIncome: [...(data.extraIncome ?? [])]
-  };
+  return createBackupPayload({
+    expenses: data.expenses ?? [],
+    salaries: data.salaries ?? [],
+    savings: data.savings ?? [],
+    extraIncome: data.extraIncome ?? [],
+    outbox: data.outbox ?? [],
+    meta: data.meta ?? [],
+    user: state.user
+  });
 }
 
-function downloadBackup(filename = `spendly-backup-${localToday()}.json`, data = snapshotData()) {
+async function downloadBackup(filename = null, data = null) {
+  let fullData;
+  if (data) {
+    fullData = data;
+  } else if (state.ledgerRepo?.exportFullSnapshot) {
+    fullData = await state.ledgerRepo.exportFullSnapshot();
+  } else {
+    fullData = snapshotData();
+  }
+
+  const payload = backupPayload(fullData);
+  const finalFilename = filename || `spendly-backup-${localToday()}.json`;
+
   downloadBlob(
-    new Blob([JSON.stringify(backupPayload(data), null, 2)], { type: 'application/json' }),
-    filename
+    new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
+    finalFilename
   );
 }
 
@@ -2301,11 +2320,15 @@ function generateImportId() {
 }
 
 async function applyBackup(data) {
-  await state.ledgerRepo.replaceCollections({
-    expenses: data.expenses ?? [],
-    salaries: data.salaries ?? [],
-    savings: data.savings ?? [],
-    ...(Array.isArray(data.extraIncome) ? { extraIncome: data.extraIncome } : {})
+  await state.ledgerRepo.restoreCollections({
+    data: {
+      expenses: data.expenses ?? [],
+      salaries: data.salaries ?? [],
+      savings: data.savings ?? [],
+      extraIncome: Array.isArray(data.extraIncome) ? data.extraIncome : []
+    },
+    mode: 'replace',
+    currentUser: state.user
   });
 }
 
@@ -2313,67 +2336,58 @@ async function handleRestoreFile(file) {
   if (!file) return;
 
   try {
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size > BACKUP_MAX_FILE_SIZE) {
       showToast('That file is too large to be a Spendly backup.', { tone: 'error', duration: 6000 });
       return;
     }
 
-    let parsed;
+    let fileText = '';
     try {
-      parsed = JSON.parse(await file.text());
+      fileText = await file.text();
     } catch {
+      showToast('Could not read the backup file.', { tone: 'error', duration: 6000 });
+      return;
+    }
+
+    let validated;
+    try {
+      validated = await validateBackup(fileText, state.user);
+    } catch (err) {
+      if (err instanceof BackupOwnershipMismatchError) {
+        showToast(err.message, { tone: 'error', duration: 9000 });
+        return;
+      }
+      if (err instanceof BackupValidationError) {
+        showToast(err.message, { tone: 'error', duration: 8000 });
+        return;
+      }
       showToast('That file isn’t valid JSON. Nothing was changed.', { tone: 'error', duration: 7000 });
       return;
     }
 
-    const candidate = Array.isArray(parsed) ? parsed : parsed?.expenses;
-    if (!Array.isArray(candidate)) {
-      showToast('That file doesn’t contain a Spendly backup. Nothing was changed.', { tone: 'error', duration: 7000 });
-      return;
-    }
-
-    const options = { now: () => new Date(), makeId: generateImportId };
-    const checkedExpenses = candidate.map(record => normalizeExpenseRecord(record, options));
-    const checkedSalaries = Array.isArray(parsed?.salaries)
-      ? parsed.salaries.map(record => normalizeSalaryRecord(record, options))
-      : null;
-    const checkedSavings = Array.isArray(parsed?.savings)
-      ? parsed.savings.map(record => normalizeSavingRecord(record, options))
-      : null;
-    const checkedExtraIncome = Array.isArray(parsed?.extraIncome) ? parsed.extraIncome.map(record => normalizeSavingRecord(record, options)) : null;
-
-    const invalid = [
-      ...checkedExpenses.filter(result => !result.ok),
-      ...(checkedSalaries ?? []).filter(result => !result.ok),
-      ...(checkedSavings ?? []).filter(result => !result.ok),
-      ...(checkedExtraIncome ?? []).filter(result => !result.ok)
-    ].length;
-    if (invalid) {
-      showToast(
-        `That backup has ${invalid} unreadable record${invalid === 1 ? '' : 's'}. Nothing was changed.`,
-        { tone: 'error', duration: 8000 }
-      );
-      return;
-    }
-
-    const salaries = checkedSalaries ? checkedSalaries.map(result => result.value) : null;
-    if (salaries) {
-      const months = new Set(salaries.map(record => record.monthKey));
-      if (months.size !== salaries.length) {
-        showToast('That backup has two salaries for the same month. Nothing was changed.', { tone: 'error', duration: 8000 });
+    if (validated.requiresPassphrase) {
+      const passphrase = window.prompt('This backup is password-protected. Enter the passphrase to restore:');
+      if (!passphrase) {
+        showToast('Restore cancelled. Passphrase was not provided.', { tone: 'warning' });
+        return;
+      }
+      try {
+        validated = await validateBackup(fileText, state.user, { passphrase });
+      } catch (err) {
+        showToast(err.message || 'Incorrect passphrase or corrupted encrypted backup.', { tone: 'error', duration: 8000 });
         return;
       }
     }
 
-    const records = checkedExpenses.map(result => result.value);
-    const savings = checkedSavings ? checkedSavings.map(result => result.value) : null;
-    const extraIncome = checkedExtraIncome ? checkedExtraIncome.map((result, index) => ({ ...result.value, source: parsed.extraIncome[index]?.source ?? 'other' })) : null;
-    const uniqueIds = new Set(records.map(record => record.id));
-    const countLabel = expenseWord(uniqueIds.size);
+    const { summary, data } = validated;
+    const countLabel = expenseWord(summary.expenseCount);
     const currentCount = expenseWord(state.expenses.length);
-    const snapshot = snapshotData();
-    const financeNote = salaries || savings || extraIncome
-      ? ` Salary, savings${extraIncome ? ' and extra income' : ''} in this file replace the matching data on this device.`
+    const snapshot = state.ledgerRepo?.exportFullSnapshot
+      ? await state.ledgerRepo.exportFullSnapshot()
+      : snapshotData();
+
+    const financeNote = summary.salaryCount || summary.savingsCount || summary.extraIncomeCount
+      ? ` Salary, savings${summary.extraIncomeCount ? ' and extra income' : ''} in this file replace the matching data on this device.`
       : ' Your salary, savings and extra income stay as they are.';
 
     openActionSheet({
@@ -2386,7 +2400,7 @@ async function handleRestoreFile(file) {
           tone: 'danger',
           onSelect: async () => {
             try {
-              downloadBackup(`spendly-before-restore-${localToday()}.json`, snapshot);
+              await downloadBackup(`spendly-before-restore-${localToday()}.json`, snapshot);
             } catch (error) {
               console.error('Could not create the safety backup:', error);
               showToast('A safety copy could not be downloaded, so nothing was replaced.', { tone: 'error', duration: 7000 });
@@ -2394,12 +2408,12 @@ async function handleRestoreFile(file) {
             }
 
             try {
-              const result = await state.ledgerRepo.replaceCollections({
-                expenses: records,
-                ...(salaries ? { salaries } : {}),
-                ...(savings ? { savings } : {}),
-                ...(extraIncome ? { extraIncome } : {})
+              const result = await state.ledgerRepo.restoreCollections({
+                data,
+                mode: 'replace',
+                currentUser: state.user
               });
+
               await refreshAll();
               render();
               showView('expenses');
@@ -2407,17 +2421,30 @@ async function handleRestoreFile(file) {
                 actionLabel: 'Undo',
                 duration: 9000,
                 onAction: async () => {
-                  await applyBackup(snapshot);
-                  await refreshAll();
-                  render();
-                  showView('expenses');
-                  showToast('Your previous data is back.');
+                  try {
+                    await state.ledgerRepo.restoreCollections({
+                      data: snapshot,
+                      mode: 'replace',
+                      currentUser: state.user
+                    });
+                    await refreshAll();
+                    render();
+                    showView('expenses');
+                    showToast('Your previous data is back.');
+                  } catch (undoErr) {
+                    console.error('Could not undo restore:', undoErr);
+                    showToast('Could not revert the restore.', { tone: 'error' });
+                  }
                 }
               });
             } catch (error) {
               console.error('Could not restore backup:', error);
               try {
-                await applyBackup(snapshot);
+                await state.ledgerRepo.restoreCollections({
+                  data: snapshot,
+                  mode: 'replace',
+                  currentUser: state.user
+                });
                 await refreshAll();
                 render();
               } catch (rollbackError) {
