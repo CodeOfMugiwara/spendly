@@ -20,6 +20,9 @@ import {
 export const BACKUP_APP_NAME = 'Spendly';
 export const BACKUP_SCHEMA_VERSION = 7;
 export const BACKUP_MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
+export const BACKUP_DEFAULT_PBKDF2_ITERATIONS = 600000;
+export const BACKUP_MIN_PBKDF2_ITERATIONS = 50000;
+export const BACKUP_MAX_PBKDF2_ITERATIONS = 1000000;
 
 /** Error thrown when a backup file has invalid format or violates financial rules. */
 export class BackupValidationError extends Error {
@@ -83,20 +86,27 @@ export function isEncryptedBackup(obj) {
     obj.encrypted === true &&
     obj.ciphertext &&
     obj.iv &&
-    obj.salt
+    (obj.salt || obj.kdf?.salt)
   );
 }
 
 /**
  * Encrypt backup payload with a passphrase using PBKDF2 (SHA-256) and AES-GCM.
+ * Supports configurable iteration count (defaults to BACKUP_DEFAULT_PBKDF2_ITERATIONS = 600,000)
+ * and authenticates the encryption metadata (envelope) using AES-GCM additionalData (AAD).
  */
-export async function encryptBackupPayload(payload, passphrase) {
+export async function encryptBackupPayload(payload, passphrase, { iterations = BACKUP_DEFAULT_PBKDF2_ITERATIONS } = {}) {
   if (!passphrase || typeof passphrase !== 'string') {
     throw new BackupDecryptionError('A non-empty passphrase is required to encrypt this backup.');
   }
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) {
     throw new Error('Web Crypto API is not available in this environment.');
+  }
+
+  const iterCount = Number(iterations);
+  if (!Number.isInteger(iterCount) || iterCount < BACKUP_MIN_PBKDF2_ITERATIONS || iterCount > BACKUP_MAX_PBKDF2_ITERATIONS) {
+    throw new BackupValidationError(`Invalid PBKDF2 iteration count: ${iterations}. Must be an integer between ${BACKUP_MIN_PBKDF2_ITERATIONS} and ${BACKUP_MAX_PBKDF2_ITERATIONS}.`);
   }
 
   const encoder = new TextEncoder();
@@ -115,7 +125,7 @@ export async function encryptBackupPayload(payload, passphrase) {
     {
       name: 'PBKDF2',
       salt,
-      iterations: 100000,
+      iterations: iterCount,
       hash: 'SHA-256'
     },
     keyMaterial,
@@ -124,9 +134,26 @@ export async function encryptBackupPayload(payload, passphrase) {
     ['encrypt']
   );
 
+  const saltB64 = uint8ArrayToBase64(salt);
+  const ivB64 = uint8ArrayToBase64(iv);
+  const exportedAt = new Date().toISOString();
+
+  // Canonical authenticated metadata string for AES-GCM additionalData
+  const aad = JSON.stringify({
+    app: BACKUP_APP_NAME,
+    schemaVersion: BACKUP_SCHEMA_VERSION,
+    algorithm: 'AES-GCM-256',
+    kdf: 'PBKDF2-HMAC-SHA256',
+    iterations: iterCount
+  });
+
   const plaintext = encoder.encode(typeof payload === 'string' ? payload : JSON.stringify(payload));
   const ciphertextBuffer = await subtle.encrypt(
-    { name: 'AES-GCM', iv },
+    {
+      name: 'AES-GCM',
+      iv,
+      additionalData: encoder.encode(aad)
+    },
     key,
     plaintext
   );
@@ -136,17 +163,27 @@ export async function encryptBackupPayload(payload, passphrase) {
     version: BACKUP_SCHEMA_VERSION,
     schemaVersion: BACKUP_SCHEMA_VERSION,
     encrypted: true,
-    algorithm: 'AES-GCM-PBKDF2',
-    iterations: 100000,
-    salt: uint8ArrayToBase64(salt),
-    iv: uint8ArrayToBase64(iv),
+    algorithm: 'AES-GCM-256',
+    kdf: {
+      algorithm: 'PBKDF2-HMAC-SHA256',
+      hash: 'SHA-256',
+      iterations: iterCount,
+      salt: saltB64
+    },
+    // Top-level fallbacks for legacy readers
+    iterations: iterCount,
+    salt: saltB64,
+    iv: ivB64,
+    aad,
     ciphertext: uint8ArrayToBase64(new Uint8Array(ciphertextBuffer)),
-    exportedAt: new Date().toISOString()
+    exportedAt
   };
 }
 
 /**
  * Decrypt an encrypted backup payload using the passphrase.
+ * Validates KDF parameters against resource exhaustion limits and authenticates AAD metadata.
+ * Fully backwards-compatible with legacy Phase 7 backups (100,000 iterations without AAD).
  */
 export async function decryptBackupPayload(encryptedObj, passphrase) {
   if (!passphrase || typeof passphrase !== 'string') {
@@ -157,13 +194,80 @@ export async function decryptBackupPayload(encryptedObj, passphrase) {
     throw new Error('Web Crypto API is not available in this environment.');
   }
 
-  try {
-    const salt = base64ToUint8Array(encryptedObj.salt);
-    const iv = base64ToUint8Array(encryptedObj.iv);
-    const ciphertext = base64ToUint8Array(encryptedObj.ciphertext);
-    const iterations = encryptedObj.iterations || 100000;
+  if (!isEncryptedBackup(encryptedObj)) {
+    throw new BackupValidationError('The file is not a valid encrypted Spendly backup.');
+  }
 
-    const encoder = new TextEncoder();
+  // 1. Validate KDF parameters to protect against resource exhaustion or corrupted inputs
+  const rawIterations = encryptedObj.kdf?.iterations ?? encryptedObj.iterations;
+  const iterations = Number(rawIterations);
+  if (!Number.isInteger(iterations) || iterations < BACKUP_MIN_PBKDF2_ITERATIONS || iterations > BACKUP_MAX_PBKDF2_ITERATIONS) {
+    throw new BackupValidationError(`Invalid or unsupported PBKDF2 iterations in encrypted backup: ${rawIterations}. Expected integer between ${BACKUP_MIN_PBKDF2_ITERATIONS} and ${BACKUP_MAX_PBKDF2_ITERATIONS}.`);
+  }
+
+  const rawSalt = encryptedObj.kdf?.salt || encryptedObj.salt;
+  if (!rawSalt || typeof rawSalt !== 'string') {
+    throw new BackupValidationError('Encrypted backup is missing a cryptographic salt.');
+  }
+
+  let salt;
+  try {
+    salt = base64ToUint8Array(rawSalt);
+  } catch {
+    throw new BackupValidationError('Malformed salt encoding in encrypted backup.');
+  }
+  if (salt.byteLength < 16 || salt.byteLength > 64) {
+    throw new BackupValidationError(`Invalid salt length (${salt.byteLength} bytes). Expected between 16 and 64 bytes.`);
+  }
+
+  if (!encryptedObj.iv || typeof encryptedObj.iv !== 'string') {
+    throw new BackupValidationError('Encrypted backup is missing initialization vector (IV).');
+  }
+
+  let iv;
+  try {
+    iv = base64ToUint8Array(encryptedObj.iv);
+  } catch {
+    throw new BackupValidationError('Malformed initialization vector encoding.');
+  }
+  if (iv.byteLength !== 12) {
+    throw new BackupValidationError(`Invalid initialization vector length (${iv.byteLength} bytes). Expected 12 bytes for AES-GCM.`);
+  }
+
+  if (encryptedObj.algorithm && typeof encryptedObj.algorithm === 'string') {
+    const algo = encryptedObj.algorithm.toUpperCase();
+    if (!algo.includes('AES-GCM')) {
+      throw new BackupValidationError(`Unsupported encryption cipher algorithm: ${encryptedObj.algorithm}. Spendly requires AES-GCM.`);
+    }
+  }
+
+  // 2. Validate AAD metadata consistency if present
+  let additionalData = null;
+  const encoder = new TextEncoder();
+  if (encryptedObj.aad) {
+    if (typeof encryptedObj.aad !== 'string') {
+      throw new BackupValidationError('Malformed authenticated metadata (AAD) in encrypted backup.');
+    }
+    try {
+      const parsedAad = JSON.parse(encryptedObj.aad);
+      if (parsedAad.iterations !== iterations) {
+        throw new BackupValidationError('Encrypted backup metadata mismatch: authenticated iteration count does not match KDF parameter.');
+      }
+    } catch (e) {
+      if (e instanceof BackupValidationError) throw e;
+      throw new BackupValidationError('Invalid JSON in authenticated metadata envelope.');
+    }
+    additionalData = encoder.encode(encryptedObj.aad);
+  }
+
+  let ciphertext;
+  try {
+    ciphertext = base64ToUint8Array(encryptedObj.ciphertext);
+  } catch {
+    throw new BackupValidationError('Malformed ciphertext encoding in encrypted backup.');
+  }
+
+  try {
     const keyMaterial = await subtle.importKey(
       'raw',
       encoder.encode(passphrase),
@@ -185,8 +289,13 @@ export async function decryptBackupPayload(encryptedObj, passphrase) {
       ['decrypt']
     );
 
+    const decryptParams = { name: 'AES-GCM', iv };
+    if (additionalData) {
+      decryptParams.additionalData = additionalData;
+    }
+
     const decryptedBuffer = await subtle.decrypt(
-      { name: 'AES-GCM', iv },
+      decryptParams,
       key,
       ciphertext
     );
@@ -194,6 +303,7 @@ export async function decryptBackupPayload(encryptedObj, passphrase) {
     const decoder = new TextDecoder();
     return JSON.parse(decoder.decode(decryptedBuffer));
   } catch (err) {
+    if (err instanceof BackupValidationError) throw err;
     throw new BackupDecryptionError('Incorrect passphrase or corrupted encrypted backup file.');
   }
 }

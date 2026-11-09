@@ -74,6 +74,7 @@ import {
 import {
   createBackupPayload,
   validateBackup,
+  encryptBackupPayload,
   BackupValidationError,
   BackupOwnershipMismatchError,
   BACKUP_MAX_FILE_SIZE
@@ -2295,7 +2296,7 @@ function backupPayload(data = snapshotData()) {
   });
 }
 
-async function downloadBackup(filename = null, data = null) {
+async function downloadBackup(filename = null, data = null, { encrypted = false } = {}) {
   let fullData;
   if (data) {
     fullData = data;
@@ -2306,6 +2307,23 @@ async function downloadBackup(filename = null, data = null) {
   }
 
   const payload = backupPayload(fullData);
+
+  if (encrypted) {
+    const passphrase = window.prompt('Enter a password to encrypt this backup:');
+    if (!passphrase) {
+      showToast('Encrypted export cancelled. Password was not provided.', { tone: 'warning' });
+      return;
+    }
+    const encryptedPayload = await encryptBackupPayload(payload, passphrase);
+    const finalFilename = filename || `spendly-backup-encrypted-${localToday()}.json`;
+    downloadBlob(
+      new Blob([JSON.stringify(encryptedPayload, null, 2)], { type: 'application/json' }),
+      finalFilename
+    );
+    showToast('Encrypted backup downloaded.', { tone: 'positive' });
+    return;
+  }
+
   const finalFilename = filename || `spendly-backup-${localToday()}.json`;
 
   downloadBlob(
@@ -3159,6 +3177,18 @@ function bindEvents() {
       showToast('Couldn’t download the backup. Try again.', { tone: 'error' });
     }
   });
+  const encBtn = $('downloadEncryptedBackup');
+  if (encBtn) {
+    encBtn.addEventListener('click', async () => {
+      try {
+        await downloadBackup(null, null, { encrypted: true });
+        const recorded = await recordBackupDownload();
+      } catch (error) {
+        console.error('Could not download encrypted backup:', error);
+        showToast('Couldn’t download the encrypted backup. Try again.', { tone: 'error' });
+      }
+    });
+  }
   $('backupNow').addEventListener('click', () => $('downloadBackup').click());
   $('dismissBackupReminder').addEventListener('click', async () => {
     const until = new Date(Date.now() + 30 * 86400000).toISOString();

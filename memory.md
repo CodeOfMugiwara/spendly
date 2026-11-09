@@ -471,3 +471,26 @@ Verification: `npm test` passed 60/60. `npm run test:e2e` passed 25/25, includin
   - Vite production build cleanly generating 12 transformed modules in 530ms.
   - Clean git diff check with zero formatting or whitespace anomalies.
   - See `context/phases/phase-7-backup-recovery.md`.
+
+## 23. Phase 8 — 9 November 2026 — Final Testing, Backup Encryption Hardening & Release Readiness
+
+**Scope:** Comprehensive end-to-end application validation, security review, PBKDF2 encryption hardening with Authenticated Additional Data (AAD), automated test suite expansion, and production release runbook.
+**Why:** Ensure complete production readiness across all financial workflows, multi-account isolation, and disaster recovery with state-of-the-art cryptographic strength and zero regressions.
+- **Cryptographic Hardening (`js/backup.js`, `index.html`, `js/app.js`)**:
+  - Benchmarked PBKDF2 key derivation across iteration thresholds (100k to 1M).
+  - Upgraded default PBKDF2-HMAC-SHA256 iteration count to 600,000 (OWASP 2023+ standard), completing in ~129ms.
+  - Added AES-GCM Authenticated Additional Data (AAD) envelope metadata authentication.
+  - Enforced strict resource-exhaustion bounds (50k to 1M iterations, salt >= 16 bytes, IV = 12 bytes) preventing DoS thread lockups.
+  - Maintained 100% backward compatibility with Phase 7 encrypted backups (100k iterations without AAD).
+  - Added `#downloadEncryptedBackup` action in Data Settings interface.
+- **Security Audit & RLS Verification**:
+  - Verified 100% RLS enforcement across all public tables and sync infrastructure on `spendly-dev`.
+  - Verified no secrets or service-role keys are exposed in client bundles or repository.
+  - Confirmed Service Worker cache version `v30` excludes dynamic Supabase API endpoints.
+- **Full Verification Record**:
+  - 135/135 unit tests passing (4 new cryptographic hardening & backward compatibility tests).
+  - 47/47 Playwright E2E browser checks passing (new end-to-end encrypted backup export & restoration scenario).
+  - 4/4 concurrency integration tests passing against live `spendly-dev` project.
+  - Production Vite bundle builds cleanly in 357ms.
+  - Clean git diff check with zero formatting or whitespace anomalies.
+  - See `context/phases/phase-8-release-readiness.md` and `context/production-release-checklist.md`.

@@ -231,8 +231,13 @@ test('encryptBackupPayload and decryptBackupPayload roundtrip successfully', asy
 
   assert.equal(isEncryptedBackup(encrypted), true);
   assert.equal(encrypted.encrypted, true);
+  assert.equal(encrypted.algorithm, 'AES-GCM-256');
+  assert.equal(encrypted.kdf.algorithm, 'PBKDF2-HMAC-SHA256');
+  assert.equal(encrypted.kdf.iterations, 600000);
+  assert.equal(encrypted.iterations, 600000);
   assert.ok(encrypted.salt);
   assert.ok(encrypted.iv);
+  assert.ok(encrypted.aad);
   assert.ok(encrypted.ciphertext);
   assert.equal(encrypted.expenses, undefined, 'Plaintext expenses must not be visible in encrypted payload');
 
@@ -244,11 +249,132 @@ test('encryptBackupPayload and decryptBackupPayload roundtrip successfully', asy
 
 test('decryptBackupPayload rejects wrong passphrase', async () => {
   const rawPayload = createBackupPayload({ user: MOCK_USER_A });
-  const encrypted = await encryptBackupPayload(rawPayload, 'correct-passphrase');
+  const encrypted = await encryptBackupPayload(rawPayload, 'correct-passphrase', { iterations: 50000 });
 
   await assert.rejects(
     () => decryptBackupPayload(encrypted, 'wrong-passphrase'),
     BackupDecryptionError
+  );
+});
+
+test('decryptBackupPayload backward compatibility: cleanly decrypts legacy Phase 7 backups (100k iterations, no AAD)', async () => {
+  // Construct genuine legacy Phase 7 backup structure
+  const rawPayload = createBackupPayload({
+    expenses: [{ id: 'legacy-exp-1', amount: 450, description: 'Legacy Coffee', date: '2026-11-01' }],
+    user: MOCK_USER_A
+  });
+
+  const subtle = globalThis.crypto.subtle;
+  const encoder = new TextEncoder();
+  const passphrase = 'LegacyPhase7Password!';
+  const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+  const iterations = 100000;
+
+  const keyMaterial = await subtle.importKey('raw', encoder.encode(passphrase), { name: 'PBKDF2' }, false, ['deriveKey']);
+  const key = await subtle.deriveKey({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  const ciphertextBuffer = await subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(JSON.stringify(rawPayload)));
+
+  // Legacy envelope has no kdf object and no aad
+  const legacyBackup = {
+    app: BACKUP_APP_NAME,
+    version: 7,
+    schemaVersion: 7,
+    encrypted: true,
+    algorithm: 'AES-GCM-PBKDF2',
+    iterations: 100000,
+    salt: Buffer.from(salt).toString('base64'),
+    iv: Buffer.from(iv).toString('base64'),
+    ciphertext: Buffer.from(ciphertextBuffer).toString('base64'),
+    exportedAt: '2026-11-09T00:00:00.000Z'
+  };
+
+  assert.equal(isEncryptedBackup(legacyBackup), true);
+  const decrypted = await decryptBackupPayload(legacyBackup, passphrase);
+  assert.equal(decrypted.app, BACKUP_APP_NAME);
+  assert.equal(decrypted.expenses.length, 1);
+  assert.equal(decrypted.expenses[0].description, 'Legacy Coffee');
+
+  // Reject wrong password on legacy backup
+  await assert.rejects(
+    () => decryptBackupPayload(legacyBackup, 'wrong-legacy-password'),
+    BackupDecryptionError
+  );
+});
+
+test('decryptBackupPayload rejects tampered Authenticated Additional Data (AAD)', async () => {
+  const rawPayload = createBackupPayload({ user: MOCK_USER_A });
+  const encrypted = await encryptBackupPayload(rawPayload, 'aad-protection-key', { iterations: 50000 });
+
+  // Tamper with aad iteration count in envelope
+  const tampered = structuredClone(encrypted);
+  tampered.aad = JSON.stringify({ app: BACKUP_APP_NAME, schemaVersion: 7, algorithm: 'AES-GCM-256', kdf: 'PBKDF2-HMAC-SHA256', iterations: 999999 });
+
+  await assert.rejects(
+    () => decryptBackupPayload(tampered, 'aad-protection-key'),
+    BackupValidationError
+  );
+});
+
+test('decryptBackupPayload rejects malicious resource-exhaustion iteration counts', async () => {
+  const rawPayload = createBackupPayload({ user: MOCK_USER_A });
+  const encrypted = await encryptBackupPayload(rawPayload, 'safe-passphrase', { iterations: 50000 });
+
+  // 1. Iterations too high (e.g. 50,000,000 intended to lock the browser thread)
+  const excessiveIters = structuredClone(encrypted);
+  excessiveIters.iterations = 50000000;
+  if (excessiveIters.kdf) excessiveIters.kdf.iterations = 50000000;
+  await assert.rejects(
+    () => decryptBackupPayload(excessiveIters, 'safe-passphrase'),
+    err => err instanceof BackupValidationError && err.message.includes('Invalid or unsupported PBKDF2 iterations')
+  );
+
+  // 2. Iterations too low (e.g. 100 weak derivation)
+  const weakIters = structuredClone(encrypted);
+  weakIters.iterations = 100;
+  if (weakIters.kdf) weakIters.kdf.iterations = 100;
+  await assert.rejects(
+    () => decryptBackupPayload(weakIters, 'safe-passphrase'),
+    err => err instanceof BackupValidationError && err.message.includes('Invalid or unsupported PBKDF2 iterations')
+  );
+
+  // 3. Non-integer iterations
+  const floatIters = structuredClone(encrypted);
+  floatIters.iterations = 100000.5;
+  if (floatIters.kdf) floatIters.kdf.iterations = 100000.5;
+  await assert.rejects(
+    () => decryptBackupPayload(floatIters, 'safe-passphrase'),
+    BackupValidationError
+  );
+});
+
+test('decryptBackupPayload rejects malformed salt, IV, and unsupported cipher algorithms', async () => {
+  const rawPayload = createBackupPayload({ user: MOCK_USER_A });
+  const encrypted = await encryptBackupPayload(rawPayload, 'safe-passphrase', { iterations: 50000 });
+
+  // 1. Truncated salt (< 16 bytes)
+  const shortSalt = structuredClone(encrypted);
+  shortSalt.salt = Buffer.from('short-salt').toString('base64');
+  if (shortSalt.kdf) shortSalt.kdf.salt = shortSalt.salt;
+  await assert.rejects(
+    () => decryptBackupPayload(shortSalt, 'safe-passphrase'),
+    err => err instanceof BackupValidationError && err.message.includes('Invalid salt length')
+  );
+
+  // 2. Invalid IV length (!= 12 bytes)
+  const invalidIv = structuredClone(encrypted);
+  invalidIv.iv = Buffer.from('invalid-iv-length-not-12-bytes').toString('base64');
+  await assert.rejects(
+    () => decryptBackupPayload(invalidIv, 'safe-passphrase'),
+    err => err instanceof BackupValidationError && err.message.includes('Invalid initialization vector length')
+  );
+
+  // 3. Unsupported cipher (e.g. DES or RSA)
+  const badAlgo = structuredClone(encrypted);
+  badAlgo.algorithm = 'DES-CBC';
+  await assert.rejects(
+    () => decryptBackupPayload(badAlgo, 'safe-passphrase'),
+    err => err instanceof BackupValidationError && err.message.includes('Unsupported encryption cipher')
   );
 });
 

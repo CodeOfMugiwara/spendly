@@ -3315,6 +3315,107 @@ await run('Phase 7: Restoring backup with pending outbox operations reconciles w
 });
 
 /* -------------------------------------------------------------------------- */
+/* 11. Phase 8: Final Testing & Release Readiness                             */
+/* -------------------------------------------------------------------------- */
+
+await run('Phase 8: Encrypted backup export, invalid passphrase rejection, and successful restoration', async () => {
+  const context = await createContext();
+  const page = await context.newPage();
+  globalThis.__activePage = page;
+  watch(page);
+
+  await page.route('**/rest/v1/rpc/apply_sync_operation*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, cursor: 1 })
+    });
+  });
+  await page.route('**/rest/v1/rpc/get_sync_changes*', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ changes: [], nextCursor: 0, hasMore: false })
+    });
+  });
+
+  await gotoApp(page);
+
+  await addExpense(page, { amount: '620', description: 'Encrypted Vault Dinner', source: 'others' });
+  await waitForToast(page, 'Expense recorded under Others');
+
+  await openDataSettings(page);
+
+  // Set up prompt dialog handler for password input
+  page.on('dialog', async dialog => {
+    if (dialog.type() === 'prompt') {
+      await dialog.accept('SpendlyVaultPass2026!');
+    } else {
+      await dialog.dismiss();
+    }
+  });
+
+  // Export encrypted backup
+  const encryptedDownload = await downloadFrom(page, () => page.locator('#downloadEncryptedBackup').click());
+  const parsedEncrypted = JSON.parse(encryptedDownload.text);
+
+  assert.equal(parsedEncrypted.app, 'Spendly');
+  assert.equal(parsedEncrypted.encrypted, true);
+  assert.equal(parsedEncrypted.algorithm, 'AES-GCM-256');
+  assert.equal(parsedEncrypted.kdf.algorithm, 'PBKDF2-HMAC-SHA256');
+  assert.equal(parsedEncrypted.kdf.iterations, 600000);
+  assert.ok(parsedEncrypted.salt);
+  assert.ok(parsedEncrypted.iv);
+  assert.ok(parsedEncrypted.aad);
+  assert.ok(parsedEncrypted.ciphertext);
+  assert.equal(parsedEncrypted.expenses, undefined, 'Plaintext expenses must not be exposed');
+
+  const encryptedFilePath = path.join(RESULTS, 'spendly-encrypted-test-export.json');
+  await writeFile(encryptedFilePath, encryptedDownload.text);
+
+  // Now erase local data to prove restoration works from the encrypted file
+  await page.locator('#eraseAllData').click();
+  await page.locator('#actionList .action__item').filter({ hasText: 'Erase all data' }).click();
+  await waitForToast(page, 'All Spendly data erased.');
+
+  // Attempt restore with wrong passphrase
+  page.removeAllListeners('dialog');
+  page.on('dialog', async dialog => {
+    if (dialog.type() === 'prompt') {
+      await dialog.accept('wrong-password!');
+    } else {
+      await dialog.dismiss();
+    }
+  });
+
+  await page.locator('#fileInput').setInputFiles(encryptedFilePath);
+  await waitForToast(page, 'Incorrect passphrase');
+
+  // Attempt restore with correct passphrase
+  page.removeAllListeners('dialog');
+  page.on('dialog', async dialog => {
+    if (dialog.type() === 'prompt') {
+      await dialog.accept('SpendlyVaultPass2026!');
+    } else {
+      await dialog.dismiss();
+    }
+  });
+
+  await page.locator('#fileInput').setInputFiles(encryptedFilePath);
+  await page.locator('#actionSheet').waitFor({ state: 'visible' });
+  await downloadFrom(page, () => page.locator('#actionList .action__item').click());
+  await waitForToast(page, 'Backup restored');
+
+  await page.locator('#closeDataSettings').click();
+
+  // Verify restored expense appears
+  await page.locator('[data-view="expenses"]').click();
+  await page.locator('#historyList .entry').filter({ hasText: 'Encrypted Vault Dinner' }).waitFor({ state: 'visible' });
+
+  await context.close();
+});
+
+/* -------------------------------------------------------------------------- */
 /* Results                                                                    */
 /* -------------------------------------------------------------------------- */
 
