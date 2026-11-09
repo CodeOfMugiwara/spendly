@@ -143,3 +143,15 @@ Rules: one primary action per page; no page repeats another page’s main job; c
 ## Addendum — Salary balance 3.6
 
 The existing forest-green Salary card keeps Remaining Balance as its largest value and retains the three Salary, Savings and Expenses details. Remaining Balance now combines the regular salary pool with Extra Income assigned to that salary record; the Salary detail itself continues to show regular salary only. Extra Income's separate history remains below Salary History, with its actual received date visible alongside its assigned salary month.
+
+## Addendum — 9 November 2026: 3-Zone Header Architecture & Profile Dropdown
+
+- **3-Zone Header Grid**: `.app-bar__inner` uses a 3-column CSS Grid (`1fr auto 1fr`) to guarantee mathematical centering for the status badge regardless of brand or action cluster width.
+- **Centered System Heartbeat**: `.connection` status badge ("Synced", "Offline", "Syncing…", "Waiting for internet", "On this device") sits in the center zone, immediately communicating offline-first synchronization state.
+- **Global Data & Sync Settings**: Accessible cleanly via the "Data & Sync Settings" item inside the profile dropdown menu as well as by clicking the centered `.connection` status pill, eliminating clutter from the top bar.
+- **High-Privacy Profile Avatar & Dropdown**:
+  - Replaces exposed plaintext email with a 36px circular avatar button (`#userProfileBtn`) displaying the user's initial or icon.
+  - Tapping opens a floating Liquid Glass card (`#profileDropdown`) with 26px blur, 18px radius, and subtle shadow.
+  - Dropdown displays large avatar, user email (`#dropdownEmailLabel`), sync badge, direct link to Data & Sync Settings, and the **Sign out** button (`#headerSignOutButton`).
+  - Outside clicks dismiss the dropdown; `Escape` key closes and returns focus to `#userProfileBtn`.
+- **Mobile Adaptations**: On viewports `<520px`, the brand tagline auto-collapses; on viewports `<380px`, header buttons adapt to 32–34px with minimum 44px touch boundaries.

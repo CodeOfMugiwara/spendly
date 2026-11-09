@@ -193,16 +193,45 @@
             <span class="brand__tag">Salary, spending &amp; savings</span>
           </span>
         </div>
-        <div class="user-chip" id="userChip" hidden>
-          <span class="user-chip__avatar" id="userAvatar" aria-hidden="true">U</span>
-          <span class="user-chip__email" id="userEmailLabel"></span>
-          <button class="user-chip__button" type="button" id="headerSignOutButton" title="Sign out" aria-label="Sign out">
-            <svg class="icon" aria-hidden="true"><use href="#i-logout"></use></svg>
-          </button>
+
+        <div class="app-bar__center">
+          <div class="connection" id="connection" data-state="online" title="Where your data is saved">
+            <span class="connection__dot" aria-hidden="true"></span>
+            <span id="connectionText">On this device</span>
+          </div>
         </div>
-        <div class="connection" id="connection" data-state="online" title="Where your data is saved">
-          <span class="connection__dot" aria-hidden="true"></span>
-          <span id="connectionText">On this device</span>
+
+        <div class="app-bar__actions">
+          <div class="profile-container" id="userChip" hidden>
+            <button class="profile-btn" type="button" id="userProfileBtn" aria-label="Account options" aria-haspopup="menu" aria-expanded="false" title="Account profile">
+              <span class="profile-btn__avatar" id="userAvatar" aria-hidden="true">U</span>
+              <span class="visually-hidden" id="userEmailLabel"></span>
+            </button>
+
+            <div class="profile-dropdown" id="profileDropdown" role="menu" hidden>
+              <div class="profile-dropdown__header">
+                <div class="profile-dropdown__avatar" id="dropdownAvatar" aria-hidden="true">U</div>
+                <div class="profile-dropdown__meta">
+                  <strong class="profile-dropdown__email" id="dropdownEmailLabel"></strong>
+                  <span class="profile-dropdown__badge" id="dropdownSyncBadge">Cloud sync active</span>
+                </div>
+              </div>
+
+              <div class="profile-dropdown__divider" role="separator"></div>
+
+              <button class="profile-dropdown__item" type="button" id="openDataSettings" role="menuitem">
+                <svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg>
+                <span>Data &amp; Sync Settings</span>
+              </button>
+
+              <div class="profile-dropdown__divider" role="separator"></div>
+
+              <button class="profile-dropdown__item profile-dropdown__item--danger" type="button" id="headerSignOutButton" role="menuitem">
+                <svg class="icon" aria-hidden="true"><use href="#i-logout"></use></svg>
+                <span>Sign out</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -604,12 +633,9 @@
       <!-- Salary                                                             -->
       <!-- ================================================================== -->
       <section class="view" id="view-salary" aria-labelledby="salaryTitle" hidden>
-        <header class="page-head page-head--salary">
+        <header class="page-head">
           <p class="eyebrow">Income</p>
           <h1 class="page-head__title" id="salaryTitle" tabindex="-1">Salary</h1>
-          <button class="icon-button salary-settings" type="button" id="openDataSettings" aria-label="Open data settings" title="Data settings" aria-haspopup="dialog">
-            <svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg>
-          </button>
           <p class="page-head__sub">What you earned each month — one record per month.</p>
         </header>
 

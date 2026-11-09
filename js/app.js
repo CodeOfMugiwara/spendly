@@ -348,19 +348,36 @@ function hideAuthScreen() {
 function updateUserUI(user) {
   const chip = $('userChip');
   const avatar = $('userAvatar');
+  const dropdownAvatar = $('dropdownAvatar');
   const emailLabel = $('userEmailLabel');
+  const dropdownEmail = $('dropdownEmailLabel');
   const settingsEmail = $('settingsUserEmail');
+  const profileDropdown = $('profileDropdown');
+  const userProfileBtn = $('userProfileBtn');
 
   if (user && user.email) {
+    const initial = user.email.charAt(0).toUpperCase();
     if (chip) chip.hidden = false;
     if (emailLabel) emailLabel.textContent = user.email;
-    if (avatar) avatar.textContent = user.email.charAt(0).toUpperCase();
+    if (dropdownEmail) dropdownEmail.textContent = user.email;
+    if (avatar) avatar.textContent = initial;
+    if (dropdownAvatar) dropdownAvatar.textContent = initial;
+    if (userProfileBtn) {
+      userProfileBtn.setAttribute('aria-label', `Account menu for ${user.email}`);
+    }
     if (settingsEmail) settingsEmail.textContent = user.email;
     if ($('syncSettingsCard')) $('syncSettingsCard').hidden = false;
   } else {
     if (chip) chip.hidden = true;
     if (emailLabel) emailLabel.textContent = '';
+    if (dropdownEmail) dropdownEmail.textContent = '';
     if (avatar) avatar.textContent = 'U';
+    if (dropdownAvatar) dropdownAvatar.textContent = 'U';
+    if (userProfileBtn) {
+      userProfileBtn.setAttribute('aria-label', 'Account options');
+      userProfileBtn.setAttribute('aria-expanded', 'false');
+    }
+    if (profileDropdown) profileDropdown.hidden = true;
     if (settingsEmail) settingsEmail.textContent = '';
     if ($('syncSettingsCard')) $('syncSettingsCard').hidden = true;
   }
@@ -3398,7 +3415,54 @@ function bindAuthEvents() {
     await handleLogout();
   };
 
-  $('headerSignOutButton')?.addEventListener('click', doSignOut);
+  const userProfileBtn = $('userProfileBtn');
+  const profileDropdown = $('profileDropdown');
+
+  function closeProfileDropdown() {
+    if (profileDropdown && !profileDropdown.hidden) {
+      profileDropdown.hidden = true;
+      userProfileBtn?.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  function toggleProfileDropdown() {
+    if (!profileDropdown) return;
+    const isHidden = profileDropdown.hidden;
+    profileDropdown.hidden = !isHidden;
+    userProfileBtn?.setAttribute('aria-expanded', String(isHidden));
+  }
+
+  userProfileBtn?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleProfileDropdown();
+  });
+
+  const handleOpenSettings = () => {
+    closeProfileDropdown();
+    openDialog($('dataSettingsSheet'));
+  };
+  $('openDataSettings')?.addEventListener('click', handleOpenSettings);
+  $('profileSettingsBtn')?.addEventListener('click', handleOpenSettings);
+
+  document.addEventListener('click', (event) => {
+    if (profileDropdown && !profileDropdown.hidden) {
+      if (!event.target.closest('#userChip')) {
+        closeProfileDropdown();
+      }
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && profileDropdown && !profileDropdown.hidden) {
+      closeProfileDropdown();
+      userProfileBtn?.focus();
+    }
+  });
+
+  $('headerSignOutButton')?.addEventListener('click', () => {
+    closeProfileDropdown();
+    void doSignOut();
+  });
   $('settingsSignOutButton')?.addEventListener('click', () => {
     closeDialog($('dataSettingsSheet'));
     void doSignOut();

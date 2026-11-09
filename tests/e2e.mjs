@@ -260,9 +260,22 @@ async function openRowMenu(page, listSelector, text) {
 }
 
 async function openDataSettings(page) {
-  await page.locator('[data-view="salary"]').click();
-  await page.locator('#openDataSettings').click();
+  const profileBtn = page.locator('#userProfileBtn');
+  if (await profileBtn.isVisible()) {
+    await profileBtn.click();
+    await page.locator('#openDataSettings').click();
+  } else {
+    await page.locator('#connection').click();
+  }
   await page.locator('#dataSettingsSheet').waitFor({ state: 'visible' });
+}
+
+async function signOutFromHeader(page) {
+  const profileBtn = page.locator('#userProfileBtn');
+  if (await profileBtn.isVisible()) {
+    await profileBtn.click();
+  }
+  await page.locator('#headerSignOutButton').click();
 }
 
 function daysAgoISO(days) {
@@ -2273,7 +2286,7 @@ await run('multi-account switching provides strict IndexedDB isolation and clean
   assert.equal(snapshotA.records[0].description, 'User A Secret Lunch');
 
   // User A signs out
-  await page.locator('#headerSignOutButton').click();
+  await signOutFromHeader(page);
   await page.locator('#authView').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#authLoginCard').isVisible(), true);
   assert.equal(await page.locator('#userChip').isVisible(), false);
@@ -2302,7 +2315,7 @@ await run('multi-account switching provides strict IndexedDB isolation and clean
   await waitForToast(page, 'Expense added successfully');
 
   // User B signs out
-  await page.locator('#headerSignOutButton').click();
+  await signOutFromHeader(page);
   await page.locator('#authView').waitFor({ state: 'visible' });
 
   // Switch back to User A
@@ -2394,7 +2407,7 @@ await run('offline authentication reopens cached session without network calls a
   assert.equal(await page.locator('#offlineBanner').isVisible(), true);
 
   // Sign out offline
-  await page.locator('#headerSignOutButton').click();
+  await signOutFromHeader(page);
   await page.locator('#authView').waitFor({ state: 'visible' });
 
   // Try signing in while offline
@@ -2522,7 +2535,7 @@ await run('Google authenticated session restores, mounts isolated IndexedDB and 
   assert.equal(snapshot.records[0].description, 'Google Pixel Case');
 
   // Google user signs out
-  await page.locator('#headerSignOutButton').click();
+  await signOutFromHeader(page);
   await page.locator('#authView').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#authLoginCard').isVisible(), true);
   assert.equal(await page.locator('#userChip').isVisible(), false);
@@ -2609,7 +2622,7 @@ await run('Google account maintains strict isolation against email accounts and 
   await waitForToast(page, 'Expense added successfully');
 
   // Step 2: Sign out Google User
-  await page.locator('#headerSignOutButton').click();
+  await signOutFromHeader(page);
   await page.locator('#authView').waitFor({ state: 'visible' });
 
   // Step 3: Login as Email User
@@ -2632,7 +2645,7 @@ await run('Google account maintains strict isolation against email accounts and 
   await waitForToast(page, 'Expense added successfully');
 
   // Step 4: Sign out Email User
-  await page.locator('#headerSignOutButton').click();
+  await signOutFromHeader(page);
   await page.locator('#authView').waitFor({ state: 'visible' });
 
   // Step 5: Login back as Google User
@@ -2723,7 +2736,7 @@ await run('financial mutations create atomic outbox operations with monotonic se
   assert.equal(reloadSnapshot.outbox.length, 4, 'pending outbox operations survive page reload');
 
   // Sign out and verify outbox records persist on disk in user database
-  await page.locator('#headerSignOutButton').click();
+  await signOutFromHeader(page);
   await page.locator('#authView').waitFor({ state: 'visible' });
 
   // Read the user database directly using customName

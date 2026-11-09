@@ -494,3 +494,25 @@ Verification: `npm test` passed 60/60. `npm run test:e2e` passed 25/25, includin
   - Production Vite bundle builds cleanly in 357ms.
   - Clean git diff check with zero formatting or whitespace anomalies.
   - See `context/phases/phase-8-release-readiness.md` and `context/production-release-checklist.md`.
+
+
+## 24. UI/UX Elevation — 9 November 2026 — 3-Zone Header, Centered Sync Status, Global Settings & Profile Dropdown
+
+**Scope:** Visual hierarchy elevation of the top navigation bar (`.app-bar`), centering real-time connection status, relocating settings gear to the global action cluster, and transforming exposed user email into a high-privacy profile avatar and Liquid Glass dropdown menu.
+**Why:**
+- Plaintext email strings in the top bar consumed excessive width on mobile devices and exposed user PII in public.
+- The Settings button (`#openDataSettings`) was previously buried in the Salary tab, preventing access to Data Settings, Backups, and Sync options from Dashboard, Expenses, or Savings views.
+- Moving the connection status badge to the top center creates a balanced 3-zone visual layout and emphasizes Spendly's offline-first local state.
+- **Architectural & Layout Changes**:
+  - Refactored `.app-bar__inner` to a 3-column CSS Grid (`1fr auto 1fr`).
+  - Zone 1 (Left): Brand mark + Spendly text (tagline collapses gracefully at `<520px`).
+  - Zone 2 (Center): `.connection` status pill mathematically centered, displaying real-time states (Synced, Offline, Syncing…, On this device).
+  - Zone 3 (Right): Action cluster containing the `#userChip` profile avatar button with integrated Data & Sync Settings and Sign-out options.
+  - Profile dropdown (`#profileDropdown`): Floating Liquid Glass card (`blur(26px) saturate(180%)`) containing user avatar, user email (`#dropdownEmailLabel`), sync badge, Data & Sync Settings shortcut, and Sign out action (`#headerSignOutButton`).
+  - Interaction & Accessibility: Outside click dismissal, `Escape` key support, focus restoration, minimum 44px tap targets.
+- **Full Verification Record**:
+  - 135/135 unit tests passing (`npm test`).
+  - Production Vite bundle builds with zero errors (`npm run build`).
+  - Playwright E2E browser checks passing (`npm run test:e2e`).
+  - Clean git diff check with zero formatting or whitespace anomalies.
+  - See `context/design-system.md`.
